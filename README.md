@@ -17,9 +17,9 @@ npm start
 
 ## 导入模型
 
-**文件夹名称就是角色名称**。比如文件夹叫 `Miku`，角色名就是 Miku。
+**文件夹名称就是角色名称**。比如文件夹叫 `Alex`，角色名就是 Alex。
 
-模型文件夹需要包含与文件夹同名的 `.model3.json`（如 `Miku/Miku.model3.json`）。
+模型文件夹需要包含与文件夹同名的 `.model3.json`（如 `Alex/Alex.model3.json`）。
 
 导入时会自动：
 - 生成默认角色卡（`character.json`）
