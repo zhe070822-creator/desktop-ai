@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:100vw; height:100vh; overflow:hidden; user-select:none; -webkit-app-region:drag; }
+  body.pet-mode  { background:#2d2d2d !important; }
+  body.pet-mode.loaded { background:transparent !important; }
+  body.window-mode { background:#2d2d2d !important; }
+
+  #titlebar { display:none; height:32px; background:#1e1e1e; color:#ccc; font-size:12px; line-height:32px; padding:0 10px; -webkit-app-region:drag; border-bottom:1px solid #444; }
+  body.window-mode #titlebar { display:flex; justify-content:space-between; align-items:center; }
+  #titlebar .btns { display:flex; gap:6px; -webkit-app-region:no-drag; }
+  #titlebar button { background:none; border:1px solid #555; color:#ccc; font-size:11px; padding:2px 10px; border-radius:4px; cursor:pointer; }
+  #titlebar button:hover { background:#444; }
+  #titlebar button.close:hover { background:#c0392b; border-color:#c0392b; }
+
+  #canvas-wrap { position:absolute; top:0; left:0; right:0; bottom:0; display:flex; align-items:center; justify-content:center; -webkit-app-region:no-drag; }
+  body.window-mode #canvas-wrap { top:32px; }
+  canvas { display:block; background:transparent; }
+
+  #bubble { position:fixed; bottom:48px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,0.82); color:#fff; padding:8px 16px; border-radius:16px; font-size:13px; max-width:90%; text-align:center; pointer-events:none; opacity:0; transition:opacity 0.2s; z-index:10; -webkit-app-region:no-drag; }
+  #bubble.show { opacity:1; }
+
+  #chat { position:fixed; bottom:0; left:0; right:0; z-index:100; display:none; padding:6px 8px; gap:6px; -webkit-app-region:no-drag; }
+  #chat input { flex:1; background:rgba(0,0,0,0.85); border:1px solid #9b59b6; border-radius:10px; color:#fff; font-size:13px; padding:8px 12px; outline:none; }
+  #chat button { background:#9b59b6; border:none; border-radius:10px; color:#fff; font-size:13px; padding:8px 16px; cursor:pointer; white-space:nowrap; }
+
+  #context-menu { display:none; position:fixed; background:#2d2d2d; border:1px solid #555; border-radius:8px; padding:4px 0; z-index:200; min-width:160px; -webkit-app-region:no-drag; }
+  #context-menu .item { padding:8px 16px; color:#ddd; font-size:13px; cursor:pointer; }
+  #context-menu .item:hover { background:#444; }
+
+  .resize-handle { display:none; position:fixed; z-index:300; -webkit-app-region:no-drag; }
+  body.window-mode .resize-handle { display:block; }
+  #rh-top{top:0;left:4px;right:4px;height:4px;cursor:n-resize}
+  #rh-bottom{bottom:0;left:4px;right:4px;height:4px;cursor:s-resize}
+  #rh-left{top:4px;bottom:4px;left:0;width:4px;cursor:w-resize}
+  #rh-right{top:4px;bottom:4px;right:0;width:4px;cursor:e-resize}
+  #rh-tl{top:0;left:0;width:8px;height:8px;cursor:nw-resize}
+  #rh-tr{top:0;right:0;width:8px;height:8px;cursor:ne-resize}
+  #rh-bl{bottom:0;left:0;width:8px;height:8px;cursor:sw-resize}
+  #rh-br{bottom:0;right:0;width:8px;height:8px;cursor:se-resize}
+</style>
+</head>
+<body class="pet-mode">
+  <div id="titlebar"><span>桌面宠物</span><div class="btns"><button id="btn-pet-mode">切宠物模式</button><button class="close" id="btn-close">✕</button></div></div>
+  <div class="resize-handle" id="rh-top"></div><div class="resize-handle" id="rh-bottom"></div><div class="resize-handle" id="rh-left"></div><div class="resize-handle" id="rh-right"></div><div class="resize-handle" id="rh-tl"></div><div class="resize-handle" id="rh-tr"></div><div class="resize-handle" id="rh-bl"></div><div class="resize-handle" id="rh-br"></div>
+  <div id="canvas-wrap"><canvas id="canvas"></canvas></div>
+  <div id="bubble"></div>
+  <div id="chat"><input type="text" placeholder="和她说点什么..." id="chat-input"><button id="chat-send">发送</button></div>
+  <div id="context-menu"><div class="item" data-action="pet-mode">切宠物模式</div><div class="item" data-action="window-mode">切窗口模式</div><div class="item" data-action="setup">API 设置</div><div class="item" data-action="close">关闭</div></div>
+
+  <script src="live2dcubismcore.min.js"></script>
+  <script src="pet-app.js"></script>
+</body>
+</html>

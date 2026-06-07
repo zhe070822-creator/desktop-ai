@@ -1,0 +1,208 @@
+const PIXI = require('pixi.js');
+const { Live2DModel } = require('pixi-live2d-display/cubism4');
+const { ipcRenderer } = require('electron');
+const path = require('path');
+const fs = require('fs');
+
+Live2DModel.registerTicker(PIXI.Ticker);
+
+const canvas = document.getElementById('canvas');
+const bubble = document.getElementById('bubble');
+const contextMenu = document.getElementById('context-menu');
+const titlebar = document.getElementById('titlebar');
+const chatBar = document.getElementById('chat');
+const chatInput = document.getElementById('chat-input');
+const chatSend = document.getElementById('chat-send');
+
+let app, model, isPetMode = true, settings = null;
+let character = null, memory = { facts: [], messages: [] }, memoryPath = '';
+let currentModelName = '';
+
+let bubbleTimer = null;
+function show(msg, ms) {
+  clearTimeout(bubbleTimer); bubble.textContent = msg; bubble.classList.add('show');
+  if (ms) bubbleTimer = setTimeout(() => bubble.classList.remove('show'), ms);
+}
+
+function fitModel() {
+  if (!model) return;
+  model.scale.set(1);
+  const scale = Math.min(canvas.width/model.width*0.92, canvas.height/model.height*0.92);
+  model.scale.set(scale); model.x = canvas.width/2; model.y = canvas.height/2;
+  model.anchor.set(0.5, 0.5);
+}
+
+async function loadModel(name, url) {
+  currentModelName = name;
+  if (model) { app.stage.removeChild(model); model.destroy(); model = null; }
+  show('加载模型...');
+  try { model = await Live2DModel.from(url, { autoInteract: false }); }
+  catch (e) { show('模型加载失败: '+e.message); return; }
+  app.stage.addChild(model); fitModel();
+  document.body.classList.add('loaded');
+
+  // 去水印
+  try {
+    const core = model.internalModel.coreModel;
+    try { core.setPartOpacityById('Part19', 0); } catch(e) {}
+    try { core.setPartOpacityById('Part20', 0); } catch(e) {}
+    try { core.setParameterValueById('key12', 0, 1); } catch(e) {}
+  } catch(e) {}
+
+  const modelDir = path.join(__dirname, '..', 'models', name);
+  memoryPath = path.join(modelDir, 'memory.json');
+  const charFile = path.join(modelDir, 'character.json');
+  if (fs.existsSync(charFile)) {
+    try { character = JSON.parse(fs.readFileSync(charFile, 'utf-8')); } catch(e){}
+  } else {
+    character = { name, personality: `你是${name}。`, firstMessage: '你好！' };
+  }
+  memory = { facts: [], messages: [] }; loadMemory();
+  document.querySelector('#titlebar span').textContent = character?.name || name;
+  show(character?.firstMessage || `${name}来了~`, 3000);
+}
+
+// === 记忆 ===
+function loadMemory() {
+  try { if(fs.existsSync(memoryPath)) { const r=JSON.parse(fs.readFileSync(memoryPath,'utf-8')); memory=r.facts?r:{facts:[],messages:r}; } }
+  catch(e){ memory={facts:[],messages:[]}; }
+}
+function saveMemory() {
+  try { if(memory.messages.length>50)memory.messages=memory.messages.slice(-50); if(memory.facts.length>50)memory.facts=memory.facts.slice(-50); fs.writeFileSync(memoryPath,JSON.stringify(memory,null,2),'utf-8'); } catch(e){}
+}
+function addMemory(role, content) { memory.messages.push({role,content,time:Date.now()}); saveMemory(); }
+
+function buildMemoryContext() {
+  const p = [];
+  if(memory.facts.length>0){ p.push('## 你对用户的了解'); memory.facts.forEach(f=>p.push('- '+f.content)); }
+  if(memory.messages.length>0){ p.push('\n## 最近对话'); memory.messages.slice(-20).forEach(m=>p.push((m.role==='user'?'用户':'你')+': '+m.content)); }
+  return p.join('\n');
+}
+
+async function maybeSummarize() {
+  if(memory.messages.length<40||!settings||!settings.apiKey)return;
+  const msgs=memory.messages.slice(-40).map(m=>(m.role==='user'?'用户':'AI')+': '+m.content).join('\n');
+  const existing=memory.facts.map(f=>f.content).join('\n');
+  try {
+    const reply=await chatInternal(`请从以下对话提取关于用户的新关键信息（不要重复已有）。没有就答"无"。\n已有：${existing||'(无)'}\n对话：${msgs}\n用- 开头列出新信息。`,true);
+    if(reply&&reply!=='无'&&!reply.startsWith('[错误')) {
+      reply.split('\n').filter(l=>l.trim().startsWith('-')).forEach(l=>{
+        const f=l.replace(/^-\s*/,'').trim();
+        if(f.length>2&&!memory.facts.some(x=>x.content===f))memory.facts.push({content:f,time:Date.now()});
+      });
+      saveMemory();
+    }
+  }catch(e){/*静默*/}
+}
+
+// === AI ===
+async function chatInternal(userMsg, isSys) {
+  const sys=isSys?userMsg:`${character?.personality||'你是一个桌面助手。'}\n\n${buildMemoryContext()}`;
+  const msgs=isSys?[{role:'user',content:'请回复'}]:[{role:'user',content:userMsg}];
+  let body,headers;
+  if(settings.provider==='claude'){
+    headers={'Content-Type':'application/json','x-api-key':settings.apiKey,'anthropic-version':'2023-06-01'};
+    body=JSON.stringify({model:settings.model,max_tokens:isSys?1024:512,system:sys,messages:msgs});
+  }else{
+    headers={'Content-Type':'application/json','Authorization':`Bearer ${settings.apiKey}`};
+    body=JSON.stringify({model:settings.model,messages:[{role:'system',content:sys},...msgs],max_tokens:isSys?1024:512,temperature:isSys?0.3:0.8});
+  }
+  const res=await fetch(settings.apiUrl,{method:'POST',headers,body});
+  if(!res.ok)throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0,200)}`);
+  const d=await res.json();
+  return settings.provider==='claude'?d?.content?.[0]?.text:d?.choices?.[0]?.message?.content;
+}
+
+async function chatWithAI(userMsg) {
+  if(!settings||!settings.apiKey)return'请先配置 API。右键菜单 → API 设置';
+  try{const r=await chatInternal(userMsg,false);addMemory('user',userMsg);addMemory('assistant',r||'');maybeSummarize();applyExpression(r);return r||'(无回复)';}
+  catch(e){return`[错误] ${e.message}`;}
+}
+
+// === 表情 ===
+const emotionMap = {
+  '开心': '07 星星眼', '高兴': '07 星星眼', '笑': '07 星星眼', '哈哈': '07 星星眼',
+  '害羞': '02 脸红爱心', '脸红': '02 脸红爱心',
+  '生气': '03 生气', '怒': '03 生气',
+  '难过': '08 流泪', '伤心': '08 流泪', '哭': '08 流泪',
+  '惊讶': '06 0.0', '震惊': '06 0.0',
+  '无语': '04 晕', '晕': '04 晕', '困': '04 晕',
+  '得意': '01黑脸', '酷': '01黑脸', '哼': '01黑脸',
+  '吹泡泡': '10 吹泡泡',
+  '要饭': '14 要饭手',
+};
+
+const expCache = {};
+let expressionTimer = null;
+
+function applyExpression(text) {
+  if (!model || !text) return;
+  for (const [keyword, exprName] of Object.entries(emotionMap)) {
+    if (text.includes(keyword)) {
+      if (!expCache[exprName]) {
+        const expFile = path.join(__dirname, '..', 'models', currentModelName, 'Expressions', exprName + '.exp3.json');
+        if (fs.existsSync(expFile)) {
+          try { expCache[exprName] = JSON.parse(fs.readFileSync(expFile, 'utf-8')); }
+          catch(e) { expCache[exprName] = null; }
+        } else { expCache[exprName] = null; }
+      }
+      const exp = expCache[exprName];
+      if (exp && exp.Parameters) {
+        const core = model.internalModel.coreModel;
+        exp.Parameters.forEach(p => {
+          try { core.setParameterValueById(p.Id, p.Value, 1); } catch(e) {}
+        });
+        // 4 秒后恢复中性表情
+        clearTimeout(expressionTimer);
+        expressionTimer = setTimeout(() => {
+          exp.Parameters.forEach(p => {
+            try { core.setParameterValueById(p.Id, 0, 1); } catch(e) {}
+          });
+        }, 4000);
+      }
+      return;
+    }
+  }
+}
+
+function sendChat() {
+  const msg=chatInput.value.trim();if(!msg)return;
+  chatInput.value='';chatBar.style.display='none';show('...',999999);
+  chatWithAI(msg).then(r=>show(r,8000));
+}
+
+// === 初始化 ===
+async function init() {
+  settings = await ipcRenderer.invoke('get-settings');
+  if (!settings) { show('未配置，请通过托盘菜单 → API 设置'); document.body.className = 'window-mode'; titlebar.style.display = 'flex'; return; }
+
+  const modelUrl = await ipcRenderer.invoke('get-model-url');
+  app = new PIXI.Application({ view:canvas, width:320, height:360, backgroundAlpha:0, antialias:true, resolution:1, autoDensity:false });
+  if(typeof Live2DCubismCore==='undefined'){show('CubismCore加载失败');return;}
+  await loadModel(settings.activeModel, modelUrl);
+
+  ipcRenderer.on('resize',(e,{width,height,titleH,isPetMode:pm})=>{
+    if(width&&height){const cw=width,ch=height-(titleH||0);if(cw>0&&ch>0){canvas.width=cw;canvas.height=ch;canvas.style.width=cw+'px';canvas.style.height=ch+'px';if(app)app.renderer.resize(cw,ch);fitModel();}}
+    if(pm!==undefined){isPetMode=pm;document.body.className=pm?'pet-mode loaded':'window-mode';titlebar.style.display=pm?'none':'flex';}
+  });
+  ipcRenderer.on('switch-model',(e,{name,url})=>loadModel(name,url));
+  ipcRenderer.on('settings-updated',(e,data)=>{settings=data;});
+
+  let r=false,re='',rs={};
+  document.querySelectorAll('.resize-handle').forEach(h=>{h.addEventListener('mousedown',async e=>{if(isPetMode)return;r=true;const m={top:'n',bottom:'s',left:'w',right:'e',tl:'nw',tr:'ne',bl:'sw',br:'se'};re=m[h.id.replace('rh-','')]||'';const b=await ipcRenderer.invoke('get-window-bounds');rs={...b,mouseX:e.screenX,mouseY:e.screenY};e.preventDefault();e.stopPropagation();});});
+  window.addEventListener('mousemove',e=>{if(!r)return;const b={...rs},dx=e.screenX-rs.mouseX,dy=e.screenY-rs.mouseY;if(re.includes('e'))b.width=Math.max(320,b.width+dx);if(re.includes('w')){b.width=Math.max(320,b.width-dx);b.x+=dx;}if(re.includes('s'))b.height=Math.max(350,b.height+dy);if(re.includes('n')){b.height=Math.max(350,b.height-dy);b.y+=dy;}ipcRenderer.send('resize-window',b);});
+  window.addEventListener('mouseup',()=>{r=false;});
+
+  window.addEventListener('contextmenu',e=>{e.preventDefault();contextMenu.style.display='block';contextMenu.style.left=e.clientX+'px';contextMenu.style.top=e.clientY+'px';const items=contextMenu.querySelectorAll('.item');items[0].style.display=isPetMode?'none':'block';items[1].style.display=isPetMode?'block':'none';});
+  window.addEventListener('click',()=>{contextMenu.style.display='none';});
+  contextMenu.querySelectorAll('.item').forEach(item=>{item.addEventListener('click',async e=>{e.stopPropagation();contextMenu.style.display='none';const a=item.dataset.action;if(a==='pet-mode'||a==='window-mode'){isPetMode=await ipcRenderer.invoke('toggle-window-mode');document.body.className=isPetMode?'pet-mode loaded':'window-mode';titlebar.style.display=isPetMode?'none':'flex';}else if(a==='setup'){ipcRenderer.send('open-setup');}else if(a==='close')ipcRenderer.send('hide-pet');});});
+  document.getElementById('btn-pet-mode').addEventListener('click',async()=>{isPetMode=await ipcRenderer.invoke('toggle-window-mode');document.body.className=isPetMode?'pet-mode loaded':'window-mode';titlebar.style.display=isPetMode?'none':'flex';});
+  document.getElementById('btn-close').addEventListener('click',()=>ipcRenderer.send('hide-pet'));
+
+  window.addEventListener('dblclick',()=>{chatBar.style.display='flex';chatInput.focus();});
+  chatSend.addEventListener('click',sendChat);
+  chatInput.addEventListener('keydown',e=>{if(e.key==='Enter')sendChat();else if(e.key==='Escape')chatBar.style.display='none';e.stopPropagation();});
+  window.addEventListener('keydown',e=>{if(e.key==='Escape')chatBar.style.display='none';});
+}
+
+init().catch(err=>{console.error(err);show('启动失败: '+err.message);});

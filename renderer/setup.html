@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background:#1a1a2e; color:#ddd; font-family:-apple-system,'Microsoft YaHei',sans-serif;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    height:100vh; user-select:none;
+  }
+  h2 { color:#9b59b6; margin-bottom:20px; font-size:20px; }
+  .form { width:380px; display:flex; flex-direction:column; gap:12px; }
+  label { font-size:12px; color:#999; margin-bottom:-8px; }
+  select, input {
+    background:#2d2d3d; border:1px solid #444; border-radius:8px;
+    color:#fff; font-size:13px; padding:10px 12px; outline:none; width:100%;
+  }
+  select:focus, input:focus, textarea:focus { border-color:#9b59b6; }
+  textarea { background:#2d2d3d; border:1px solid #444; border-radius:8px; color:#fff; font-size:13px; padding:10px 12px; outline:none; width:100%; resize:vertical; }
+  .hint { font-size:11px; color:#888; margin-top:-6px; }
+  button {
+    background:#9b59b6; border:none; border-radius:8px; color:#fff;
+    font-size:14px; padding:12px; cursor:pointer; margin-top:8px;
+  }
+  button:hover { background:#a76bcf; }
+  button.secondary { background:transparent; border:1px solid #555; margin-top:4px; }
+  #status { color:#e74c3c; font-size:12px; min-height:20px; text-align:center; }
+</style>
+</head>
+<body>
+  <h2>桌面宠物 - 设置</h2>
+  <div class="form">
+    <label>选择模型</label>
+    <div style="display:flex;gap:8px">
+      <select id="model-select" style="flex:1"></select>
+      <button id="import-btn" class="secondary" style="margin-top:0;white-space:nowrap;padding:10px 14px">导入模型</button>
+    </div>
+
+    <label>AI 提供商</label>
+    <select id="provider">
+      <option value="custom" selected>自定义</option>
+      <option value="deepseek">DeepSeek</option>
+      <option value="claude">Claude (Anthropic)</option>
+      <option value="openai">OpenAI</option>
+    </select>
+
+    <label>API Key</label>
+    <input type="password" id="apikey" placeholder="sk-...">
+
+    <label>API 地址</label>
+    <input type="text" id="apiurl" placeholder="https://api.deepseek.com/v1/chat/completions">
+    <div class="hint">DeepSeek: https://api.deepseek.com/v1/chat/completions</div>
+
+    <label>模型名称</label>
+    <input type="text" id="model-name" placeholder="deepseek-chat">
+    <div class="hint">deepseek-chat | claude-sonnet-4-6 | gpt-4o</div>
+
+    <label>角色卡优化（可选，支持多文件导入）</label>
+    <textarea id="optimize-input" rows="8" placeholder="描述想要的角色性格、说话风格等，或导入文件自动填入。&#10;AI 会将此内容与当前角色卡融合。"></textarea>
+    <div style="display:flex;gap:6px">
+      <button id="import-charfile-btn" class="secondary" style="flex:1; margin-top:0;">导入文件 (.md/.json)</button>
+      <button id="import-multi-btn" class="secondary" style="flex:1; margin-top:0;">多文件导入</button>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button id="optimize-btn" class="secondary" style="flex:1" disabled>AI 融合角色卡</button>
+    </div>
+    <div class="hint" id="optimize-hint" style="margin-top:0; color:#e74c3c">请先输入新角色描述或导入文件</div>
+
+    <div id="status"></div>
+
+    <button id="save-btn">保存并启动</button>
+  </div>
+  <script src="setup-app.js"></script>
+</body>
+</html>
