@@ -236,19 +236,26 @@ function interpolateMotion(points, t) {
   return points[points.length - 1].value;
 }
 
+let motionParamSnap = {}; // 动作前的参数快照
+
 function stopMotion() {
   if (motionRAF) { cancelAnimationFrame(motionRAF); motionRAF = null; }
   if (motionAudio) { motionAudio.pause(); motionAudio = null; }
-  motionCurves.forEach(c => {
-    try {
-      if (c.target === 'PartOpacity') {
-        model.internalModel.coreModel.setPartOpacityById(c.id, c.defaultVal);
-      } else {
-        model.internalModel.coreModel.setParameterValueById(c.id, c.defaultVal, 1);
-      }
-    } catch(e) {}
-  });
+  const core = model?.internalModel?.coreModel;
+  if (core) {
+    motionCurves.forEach(c => {
+      try {
+        const v = motionParamSnap[c.id] ?? c.defaultVal;
+        if (c.target === 'PartOpacity') {
+          core.setPartOpacityById(c.id, v);
+        } else {
+          core.setParameterValueById(c.id, v, 1);
+        }
+      } catch(e) {}
+    });
+  }
   motionCurves = [];
+  motionParamSnap = {};
 }
 
 function playMotion(name) {
@@ -267,9 +274,26 @@ function playMotion(name) {
   const curves = data.Curves.map(c => ({
     id: c.Id,
     target: c.Target || 'Parameter',
-    keyframes: parseMotionSegments(c.Segments),
-    defaultVal: parseMotionSegments(c.Segments)[0]?.value || 0
+    keyframes: parseMotionSegments(c.Segments)
   }));
+
+  // 快照动作前的参数值，播完后恢复
+  const core = model.internalModel.coreModel;
+  motionParamSnap = {};
+  curves.forEach(c => {
+    try {
+      if (c.target === 'PartOpacity') {
+        motionParamSnap[c.id] = core.getPartOpacityById?.(c.id) ?? 0;
+      } else if (typeof core.getParameterValueById === 'function') {
+        motionParamSnap[c.id] = core.getParameterValueById(c.id);
+      } else {
+        const idx = core.getParameterIndex(c.id);
+        motionParamSnap[c.id] = core.getParameterValue(idx);
+      }
+    } catch(e) {
+      motionParamSnap[c.id] = undefined;
+    }
+  });
 
   motionCurves = curves;
   motionDuration = data.Meta.Duration;
@@ -296,7 +320,6 @@ function playMotion(name) {
     lastTime = now;
 
     const t = Math.min(motionElapsed, motionDuration);
-    const core = model.internalModel.coreModel;
 
     curves.forEach(c => {
       const value = interpolateMotion(c.keyframes, t);
@@ -310,19 +333,22 @@ function playMotion(name) {
     });
 
     if (motionElapsed >= motionDuration) {
-      // 恢复到动作的初始默认值，而非盲目回零
+      // 恢复到动作前的参数值
       curves.forEach(c => {
-        try {
-          if (c.target === 'PartOpacity') {
-            core.setPartOpacityById(c.id, c.defaultVal);
-          } else {
-            core.setParameterValueById(c.id, c.defaultVal, 1);
-          }
-        } catch(e) {}
+        if (motionParamSnap[c.id] !== undefined) {
+          try {
+            if (c.target === 'PartOpacity') {
+              core.setPartOpacityById(c.id, motionParamSnap[c.id]);
+            } else {
+              core.setParameterValueById(c.id, motionParamSnap[c.id], 1);
+            }
+          } catch(e) {}
+        }
       });
       if (motionAudio) { motionAudio.pause(); motionAudio = null; }
       motionRAF = null;
       motionCurves = [];
+      motionParamSnap = {};
       return;
     }
 
