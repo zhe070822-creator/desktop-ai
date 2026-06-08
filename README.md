@@ -6,10 +6,25 @@
 
 ## 快速开始
 
-```bash
-npm install
-npm start
-```
+### 第一步：安装 Node.js
+
+前往 [nodejs.org](https://nodejs.org/) 下载并安装 Node.js（LTS 版本即可）。装好后，你的电脑就有了 `npm` 命令。
+
+> 怎么确认装好了？在终端（命令提示符 / PowerShell / Windows 终端）输入 `npm -v`，如果显示版本号（如 `10.x.x`）就是装好了。
+
+### 第二步：下载并启动本项目
+
+1. 从 [Releases](https://github.com/zhe070822-creator/desktop-ai/releases) 下载最新版本的压缩包，解压到任意文件夹
+2. 在该文件夹内打开终端：
+   - **最简单的方法**：双击文件夹内的 `start.bat`，它会自动完成下面的步骤
+   - **或者手动**：在文件夹地址栏输入 `cmd` 回车，然后依次输入：
+     ```bash
+     npm install
+     npm start
+     ```
+   - `npm install` 只需运行一次（会下载项目依赖到 `node_modules/` 文件夹），以后每次启动只需 `npm start`
+
+### 第三步：开始使用
 
 1. 首次启动弹出设置窗口 → 填入 API Key（支持 DeepSeek / Claude / OpenAI / 自定义）
 2. **导入模型**：托盘右键 → 导入模型 → 选择 Live2D 模型文件夹
