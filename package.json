@@ -1,6 +1,6 @@
 {
   "name": "@zhe070822-creator/desktop-ai",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Live2D AI 桌面伙伴",
   "main": "main.js",
   "scripts": {
