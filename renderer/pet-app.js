@@ -326,7 +326,7 @@ function playMotion(name) {
 function applyExpression(text) {
   if (!model || !text) return text;
 
-  // 表情: [表情名]
+  // 表情: [表情名]（先停掉动作，不然参数会被覆盖）
   const expDir = path.join(__dirname, '..', 'models', currentModelName, 'Expressions');
   const expressions = getAvailableExpressions();
   if (expressions.length > 0) {
@@ -335,6 +335,7 @@ function applyExpression(text) {
     while ((match = expRegex.exec(text)) !== null) {
       const tagName = match[1];
       if (expressions.includes(tagName)) {
+        stopMotion();
         if (!expCache[tagName]) {
           const expFile = path.join(expDir, tagName + '.exp3.json');
           try { expCache[tagName] = JSON.parse(fs.readFileSync(expFile, 'utf-8')); }
