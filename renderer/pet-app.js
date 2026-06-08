@@ -154,6 +154,7 @@ let motionRAF = null;
 let motionElapsed = 0;
 let motionDuration = 0;
 let motionCurves = [];
+let motionAudio = null;
 
 function getAvailableMotions() {
   if (!currentModelName) return [];
@@ -166,10 +167,34 @@ function getAvailableMotions() {
   return [];
 }
 
+function loadMotionSoundMap() {
+  // 从 model3.json 读取动作对应的音频文件
+  const map = {};
+  try {
+    const m3 = path.join(__dirname, '..', 'models', currentModelName, currentModelName + '.model3.json');
+    if (fs.existsSync(m3)) {
+      const json = JSON.parse(fs.readFileSync(m3, 'utf-8'));
+      const motions = json.FileReferences?.Motions;
+      if (motions) {
+        Object.values(motions).forEach(group => {
+          group.forEach(entry => {
+            if (entry.File && entry.Sound) {
+              const key = path.basename(entry.File, '.motion3.json');
+              map[key] = { sound: entry.Sound, delay: entry.SoundDelay || 0 };
+            }
+          });
+        });
+      }
+    }
+  } catch(e) {}
+  return map;
+}
+
 function parseMotionSegments(segments) {
-  // Cubism 3+ motion segment format:
-  // [time0, value0, segType1, time1, value1, ..., timeN, valueN]
-  // First point: (time, value); subsequent: (segType, time, value); last: (time, value)
+  // Cubism 3 motion segment format:
+  // First: (time, value) = 2
+  // Linear/Stepped (0/2/3): (type, time, value) = 3
+  // Bezier (1): (type, time, value, cp1_t, cp1_v, cp2_t, cp2_v) = 7
   const points = [];
   let i = 0;
   if (i + 1 < segments.length) {
@@ -177,12 +202,19 @@ function parseMotionSegments(segments) {
     i += 2;
   }
   while (i < segments.length) {
-    if (i + 2 < segments.length) {
-      points.push({ time: segments[i + 1], value: segments[i + 2], type: segments[i] });
-      i += 3;
+    const segType = segments[i];
+    if (segType === 1) {
+      // Bezier: 7 values, ignore control points, use linear approx
+      if (i + 6 < segments.length) {
+        points.push({ time: segments[i + 1], value: segments[i + 2], type: 1 });
+        i += 7;
+      } else { break; }
     } else {
-      points.push({ time: segments[i], value: segments[i + 1], type: 0 });
-      i += 2;
+      // Linear (0), Stepped (2), InverseStepped (3): 3 values
+      if (i + 2 < segments.length) {
+        points.push({ time: segments[i + 1], value: segments[i + 2], type: segType });
+        i += 3;
+      } else { break; }
     }
   }
   return points;
@@ -206,7 +238,7 @@ function interpolateMotion(points, t) {
 
 function stopMotion() {
   if (motionRAF) { cancelAnimationFrame(motionRAF); motionRAF = null; }
-  // 重置当前动作的参数
+  if (motionAudio) { motionAudio.pause(); motionAudio = null; }
   motionCurves.forEach(c => {
     try { model.internalModel.coreModel.setParameterValueById(c.id, 0, 1); } catch(e) {}
   });
@@ -228,6 +260,7 @@ function playMotion(name) {
 
   const curves = data.Curves.map(c => ({
     id: c.Id,
+    target: c.Target || 'Parameter',
     keyframes: parseMotionSegments(c.Segments)
   }));
 
@@ -235,26 +268,51 @@ function playMotion(name) {
   motionDuration = data.Meta.Duration;
   motionElapsed = 0;
 
+  // 播放关联音频
+  const soundMap = loadMotionSoundMap();
+  const soundInfo = soundMap[name];
+  if (soundInfo) {
+    const modelDir = path.join(__dirname, '..', 'models', currentModelName);
+    const soundPath = path.join(modelDir, soundInfo.sound);
+    if (fs.existsSync(soundPath)) {
+      setTimeout(() => {
+        try { motionAudio = new Audio('file:///' + soundPath.replace(/\\/g, '/')); motionAudio.play(); }
+        catch(e) { console.error('Audio error:', e); }
+      }, soundInfo.delay);
+    }
+  }
+
   let lastTime = performance.now();
   function animate() {
     const now = performance.now();
     motionElapsed += (now - lastTime) / 1000;
     lastTime = now;
 
-    const t = data.Meta.Loop
-      ? (motionElapsed % motionDuration)
-      : Math.min(motionElapsed, motionDuration);
-
+    const t = Math.min(motionElapsed, motionDuration);
     const core = model.internalModel.coreModel;
+
     curves.forEach(c => {
-      try { core.setParameterValueById(c.id, interpolateMotion(c.keyframes, t), 1); } catch(e) {}
+      const value = interpolateMotion(c.keyframes, t);
+      try {
+        if (c.target === 'PartOpacity') {
+          core.setPartOpacityById(c.id, value);
+        } else {
+          core.setParameterValueById(c.id, value, 1);
+        }
+      } catch(e) {}
     });
 
-    if (!data.Meta.Loop && motionElapsed >= motionDuration) {
-      // 非循环动作播完重置
+    if (motionElapsed >= motionDuration) {
       curves.forEach(c => {
-        try { core.setParameterValueById(c.id, 0, 1); } catch(e) {}
+        try {
+          if (c.target === 'PartOpacity') {
+            core.setPartOpacityById(c.id, 0);
+          } else {
+            core.setParameterValueById(c.id, 0, 1);
+          }
+        } catch(e) {}
       });
+      if (motionAudio) { motionAudio.pause(); motionAudio = null; }
       motionRAF = null;
       motionCurves = [];
       return;
