@@ -81,6 +81,15 @@
 
 Electron + PixiJS + pixi-live2d-display + Live2D Cubism Core
 
+## 模型版权
+
+本项目包含的流萤（Firefly）Live2D 模型，版权归原作者所有：
+
+- **模型作者**：[@是依七哒](https://space.bilibili.com/)（B站）
+- **来源视频**：[前瞻小人模型](https://www.bilibili.com/video/BV1wSyjBFEfD/)
+
+模型仅用于角色演示。如需使用该模型，请尊重原作者版权。
+
 ## License
 
 ISC

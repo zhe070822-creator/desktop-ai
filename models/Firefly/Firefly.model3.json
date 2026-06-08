@@ -1,0 +1,166 @@
+{
+  "Version": 3,
+  "Type": 0,
+  "FileReferences": {
+    "Moc": "Firefly.moc3",
+    "Textures": [
+      "Firefly.4096/texture_00.png"
+    ],
+    "Physics": "Firefly.physics3.json",
+    "PhysicsV2": {
+      "File": "Firefly.physics3.json"
+    },
+    "Motions": {
+      "表情组": [
+        {
+          "Name": "墨镜",
+          "Expression": "墨镜.exp3",
+          "Interruptable": true
+        },
+        {
+          "Name": "猫耳",
+          "File": "Motions/眨眼.motion3.json",
+          "Sound": "voice/meow.mp3",
+          "Expression": "猫耳.exp3"
+        },
+        {
+          "Name": "裂开",
+          "Expression": "裂开.exp3"
+        }
+      ],
+      "动作组": [
+        {
+          "Name": "回正",
+          "File": "Motions/动作回正.motion3.json"
+        },
+        {
+          "Name": "思考",
+          "File": "Motions/扶额思考.motion3.json"
+        },
+        {
+          "Name": "会萤的",
+          "File": "Motions/超级自信.motion3.json",
+          "Sound": "voice/会萤的.mp3"
+        },
+        {
+          "Name": "使一颗心免于哀伤",
+          "File": "Motions/唱歌.motion3.json",
+          "Sound": "voice/无梦-若风 - 使一颗心免于哀伤-流萤.mp3",
+          "SoundDelay": 800
+        }
+      ]
+    },
+    "Expressions": [
+      {
+        "Name": "墨镜.exp3",
+        "File": "Expressions/墨镜.exp3.json"
+      },
+      {
+        "Name": "猫耳.exp3",
+        "File": "Expressions/猫耳.exp3.json"
+      },
+      {
+        "Name": "裂开.exp3",
+        "File": "Expressions/裂开.exp3.json"
+      },
+      {
+        "Name": "Scene4.motion3",
+        "File": "Motions/Scene4.motion3.json"
+      }
+    ]
+  },
+  "Controllers": {
+    "ParamHit": {},
+    "ParamLoop": {},
+    "KeyTrigger": {
+      "Items": [
+        {
+          "Input": 97,
+          "DownMtn": "表情组:墨镜"
+        },
+        {
+          "Input": 98,
+          "DownMtn": "表情组:猫耳"
+        },
+        {
+          "Input": 99,
+          "DownMtn": "表情组:裂开"
+        },
+        {
+          "Input": 100,
+          "DownMtn": "动作组:思考"
+        },
+        {
+          "Input": 101,
+          "DownMtn": "动作组:会萤的"
+        },
+        {
+          "Input": 102,
+          "DownMtn": "动作组:使一颗心免于哀伤"
+        },
+        {
+          "Input": 96,
+          "DownMtn": "动作组:回正"
+        }
+      ],
+      "Enabled": true
+    },
+    "ParamTrigger": {},
+    "AreaTrigger": {},
+    "HandTrigger": {},
+    "EyeBlink": {
+      "MinInterval": 500,
+      "MaxInterval": 6000,
+      "Items": [
+        {
+          "Id": "ParamEyeLOpen",
+          "Min": 0.0,
+          "Max": 1.0,
+          "BlendMode": 2,
+          "Input": 0
+        },
+        {
+          "Id": "ParamEyeROpen",
+          "Min": 0.0,
+          "Max": 1.0,
+          "BlendMode": 2,
+          "Input": 0
+        }
+      ],
+      "Enabled": true
+    },
+    "LipSync": {
+      "Gain": 5.0
+    },
+    "MouseTracking": {
+      "SmoothTime": 0.15,
+      "Enabled": true
+    },
+    "AutoBreath": {
+      "Enabled": true
+    },
+    "ExtraMotion": {
+      "Enabled": true
+    },
+    "Accelerometer": {
+      "Enabled": true
+    },
+    "Microphone": {},
+    "Transform": {},
+    "FaceTracking": {
+      "Enabled": true
+    },
+    "HandTracking": {},
+    "ParamValue": {},
+    "PartOpacity": {},
+    "ArtmeshOpacity": {},
+    "ArtmeshColor": {},
+    "ArtmeshCulling": {
+      "DefaultMode": 0
+    },
+    "IntimacySystem": {}
+  },
+  "Options": {
+    "TexType": 0
+  }
+}
