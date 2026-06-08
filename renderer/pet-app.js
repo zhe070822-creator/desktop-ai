@@ -240,7 +240,13 @@ function stopMotion() {
   if (motionRAF) { cancelAnimationFrame(motionRAF); motionRAF = null; }
   if (motionAudio) { motionAudio.pause(); motionAudio = null; }
   motionCurves.forEach(c => {
-    try { model.internalModel.coreModel.setParameterValueById(c.id, 0, 1); } catch(e) {}
+    try {
+      if (c.target === 'PartOpacity') {
+        model.internalModel.coreModel.setPartOpacityById(c.id, c.defaultVal);
+      } else {
+        model.internalModel.coreModel.setParameterValueById(c.id, c.defaultVal, 1);
+      }
+    } catch(e) {}
   });
   motionCurves = [];
 }
@@ -261,7 +267,8 @@ function playMotion(name) {
   const curves = data.Curves.map(c => ({
     id: c.Id,
     target: c.Target || 'Parameter',
-    keyframes: parseMotionSegments(c.Segments)
+    keyframes: parseMotionSegments(c.Segments),
+    defaultVal: parseMotionSegments(c.Segments)[0]?.value || 0
   }));
 
   motionCurves = curves;
@@ -303,12 +310,13 @@ function playMotion(name) {
     });
 
     if (motionElapsed >= motionDuration) {
+      // 恢复到动作的初始默认值，而非盲目回零
       curves.forEach(c => {
         try {
           if (c.target === 'PartOpacity') {
-            core.setPartOpacityById(c.id, 0);
+            core.setPartOpacityById(c.id, c.defaultVal);
           } else {
-            core.setParameterValueById(c.id, 0, 1);
+            core.setParameterValueById(c.id, c.defaultVal, 1);
           }
         } catch(e) {}
       });
