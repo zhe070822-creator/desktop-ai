@@ -15,14 +15,12 @@
 ### 第二步：下载并启动本项目
 
 1. 从 [Releases](https://github.com/zhe070822-creator/desktop-ai/releases) 下载最新版本的压缩包，解压到任意文件夹
-2. 在该文件夹内打开终端：
-   - **最简单的方法**：双击文件夹内的 `start.bat`，它会自动完成下面的步骤
-   - **或者手动**：在文件夹地址栏输入 `cmd` 回车，然后依次输入：
-     ```bash
-     npm install
-     npm start
-     ```
-   - `npm install` 只需运行一次（会下载项目依赖到 `node_modules/` 文件夹），以后每次启动只需 `npm start`
+2. 双击文件夹内的 `start.bat` 即可启动（首次会自动安装依赖，之后直接启动）
+3. 或者手动：在文件夹地址栏输入 `cmd` 回车，依次输入：
+   ```bash
+   npm install    # 首次需运行，下载依赖
+   npm start      # 启动程序
+   ```
 
 ### 第三步：开始使用
 
