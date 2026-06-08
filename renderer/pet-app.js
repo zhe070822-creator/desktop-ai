@@ -1,5 +1,5 @@
 const PIXI = require('pixi.js');
-const { Live2DModel, CubismMotion } = require('pixi-live2d-display/cubism4');
+const { Live2DModel } = require('pixi-live2d-display/cubism4');
 const { ipcRenderer } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -34,7 +34,7 @@ function fitModel() {
 
 async function loadModel(name, url) {
   currentModelName = name;
-  if (model) { app.stage.removeChild(model); model.destroy(); model = null; }
+  if (model) { stopMotion(); app.stage.removeChild(model); model.destroy(); model = null; }
   Object.keys(expCache).forEach(k => delete expCache[k]);
   Object.keys(motionCache).forEach(k => delete motionCache[k]);
   show('加载模型...');
@@ -117,7 +117,21 @@ function buildSystemPrompt() {
   }
   const mots = getAvailableMotions();
   if (mots.length > 0) {
-    parts.push(`\n你可以通过在你的回复中插入 {动作名} 来播放Live2D动画。可用动作：${mots.map(m => `{${m}}`).join('、')}。在适当的时候使用动作来增强表达（如变身、睡觉等）。动作标签不会被用户看到。`);
+    // 尝试读取动作说明
+    const motionsDir = path.join(__dirname, '..', 'models', currentModelName, 'Motions');
+    let motionDescs = {};
+    try {
+      const readmeFile = path.join(motionsDir, 'Readme.txt');
+      if (fs.existsSync(readmeFile)) {
+        const content = fs.readFileSync(readmeFile, 'utf-8');
+        content.split('\n').forEach(line => {
+          const m = line.match(/^(.+?\.motion3\.json)\s*:\s*(.+)$/);
+          if (m) motionDescs[m[1].replace('.motion3.json', '')] = m[2].trim();
+        });
+      }
+    } catch(e) {}
+    const motList = mots.map(m => motionDescs[m] ? `{${m}}（${motionDescs[m]}）` : `{${m}}`).join('、');
+    parts.push(`\n你可以通过在你的回复中插入 {动作名} 来播放Live2D动画。可用动作：${motList}。在适当的时候使用动作来增强表达（如变身、唱歌等）。动作标签不会被用户看到。`);
   }
   parts.push(buildMemoryContext());
   return parts.join('\n');
@@ -150,6 +164,10 @@ async function chatWithAI(userMsg) {
 const expCache = {};
 const motionCache = {};
 let expressionTimer = null;
+let motionRAF = null;
+let motionElapsed = 0;
+let motionDuration = 0;
+let motionCurves = [];
 
 function getAvailableMotions() {
   if (!currentModelName) return [];
@@ -162,6 +180,53 @@ function getAvailableMotions() {
   return [];
 }
 
+function parseMotionSegments(segments) {
+  // Cubism 3+ motion segment format:
+  // [time0, value0, segType1, time1, value1, ..., timeN, valueN]
+  // First point: (time, value); subsequent: (segType, time, value); last: (time, value)
+  const points = [];
+  let i = 0;
+  if (i + 1 < segments.length) {
+    points.push({ time: segments[i], value: segments[i + 1], type: 0 });
+    i += 2;
+  }
+  while (i < segments.length) {
+    if (i + 2 < segments.length) {
+      points.push({ time: segments[i + 1], value: segments[i + 2], type: segments[i] });
+      i += 3;
+    } else {
+      points.push({ time: segments[i], value: segments[i + 1], type: 0 });
+      i += 2;
+    }
+  }
+  return points;
+}
+
+function interpolateMotion(points, t) {
+  if (points.length === 0) return 0;
+  if (t <= points[0].time) return points[0].value;
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[i];
+    const p1 = points[i + 1];
+    if (t >= p0.time && t <= p1.time) {
+      if (p1.type === 2) return p0.value; // stepped
+      if (p1.type === 3) return p1.value; // inverse stepped
+      const ratio = (t - p0.time) / (p1.time - p0.time || 0.001);
+      return p0.value + (p1.value - p0.value) * ratio;
+    }
+  }
+  return points[points.length - 1].value;
+}
+
+function stopMotion() {
+  if (motionRAF) { cancelAnimationFrame(motionRAF); motionRAF = null; }
+  // 重置当前动作的参数
+  motionCurves.forEach(c => {
+    try { model.internalModel.coreModel.setParameterValueById(c.id, 0, 1); } catch(e) {}
+  });
+  motionCurves = [];
+}
+
 function playMotion(name) {
   if (!model) return;
   const motionsDir = path.join(__dirname, '..', 'models', currentModelName, 'Motions');
@@ -171,12 +236,47 @@ function playMotion(name) {
     catch(e) { motionCache[name] = null; return; }
   }
   const data = motionCache[name];
-  if (!data) return;
-  try {
-    const motion = CubismMotion.create(data);
-    model.internalModel.motionManager.queueManager.stopAllMotions();
-    model.internalModel.motionManager.queueManager.startMotion(motion, false, performance.now());
-  } catch(e) { console.error('Motion error:', e); }
+  if (!data || !data.Curves) return;
+
+  stopMotion();
+
+  const curves = data.Curves.map(c => ({
+    id: c.Id,
+    keyframes: parseMotionSegments(c.Segments)
+  }));
+
+  motionCurves = curves;
+  motionDuration = data.Meta.Duration;
+  motionElapsed = 0;
+
+  let lastTime = performance.now();
+  function animate() {
+    const now = performance.now();
+    motionElapsed += (now - lastTime) / 1000;
+    lastTime = now;
+
+    const t = data.Meta.Loop
+      ? (motionElapsed % motionDuration)
+      : Math.min(motionElapsed, motionDuration);
+
+    const core = model.internalModel.coreModel;
+    curves.forEach(c => {
+      try { core.setParameterValueById(c.id, interpolateMotion(c.keyframes, t), 1); } catch(e) {}
+    });
+
+    if (!data.Meta.Loop && motionElapsed >= motionDuration) {
+      // 非循环动作播完重置
+      curves.forEach(c => {
+        try { core.setParameterValueById(c.id, 0, 1); } catch(e) {}
+      });
+      motionRAF = null;
+      motionCurves = [];
+      return;
+    }
+
+    motionRAF = requestAnimationFrame(animate);
+  }
+  motionRAF = requestAnimationFrame(animate);
 }
 
 function applyExpression(text) {
