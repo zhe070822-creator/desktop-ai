@@ -264,26 +264,43 @@ function updateTrayMenu() {
   tray.setContextMenu(Menu.buildFromTemplate(template));
 }
 
+function getTrayIcon(name) {
+  for (const ext of ['.ico', '.png']) {
+    const iconPath = path.join(MODELS_DIR, name, 'icon' + ext);
+    if (fs.existsSync(iconPath)) return nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
+  }
+  for (const ext of ['.ico', '.png']) {
+    const defaultPath = path.join(__dirname, 'default-icon' + ext);
+    if (fs.existsSync(defaultPath)) return nativeImage.createFromPath(defaultPath).resize({ width: 16, height: 16 });
+  }
+  return nativeImage.createEmpty();
+}
+
 function createTray() {
-  const iconPath = path.join(MODELS_DIR, activeModel, 'icon.png');
-  tray = new Tray(fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 }) : nativeImage.createEmpty());
+  tray = new Tray(getTrayIcon(activeModel));
   tray.setToolTip('桌面宠物'); updateTrayMenu();
   tray.on('click', () => petWindow.isVisible() ? petWindow.hide() : petWindow.show());
 }
 
 function updateTrayIcon() {
   if (!tray || tray.isDestroyed()) return;
-  const iconPath = path.join(MODELS_DIR, activeModel, 'icon.png');
-  if (fs.existsSync(iconPath)) tray.setImage(nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 }));
+  tray.setImage(getTrayIcon(activeModel));
 }
 
 // === IPC ===
 ipcMain.handle('get-settings', () => loadSettings());
 ipcMain.handle('save-settings', (e, data) => {
-  saveSettings(data); activeModel = data.activeModel;
+  saveSettings(data);
+  const oldModel = activeModel;
+  activeModel = data.activeModel;
   if (setupWindow && !setupWindow.isDestroyed()) setupWindow.close();
   if (!petWindow || petWindow.isDestroyed()) createPetWindow();
-  else petWindow.webContents.send('settings-updated', data);
+  else {
+    petWindow.webContents.send('settings-updated', data);
+    if (data.activeModel && data.activeModel !== oldModel) {
+      petWindow.webContents.send('switch-model', { name: data.activeModel, url: getModelUrl(data.activeModel) });
+    }
+  }
   if (!tray || tray.isDestroyed()) createTray();
   updateTrayMenu(); return true;
 });
@@ -373,10 +390,10 @@ ipcMain.handle('optimize-character-card', async (e, modelName, userInput) => {
     let body, headers;
     if (settings.provider === 'claude') {
       headers = { 'Content-Type': 'application/json', 'x-api-key': settings.apiKey, 'anthropic-version': '2023-06-01' };
-      body = JSON.stringify({ model: settings.model, max_tokens: 4096, system: systemPrompt, messages: [{ role: 'user', content: userContent }] });
+      body = JSON.stringify({ model: settings.model, max_tokens: 20000, system: systemPrompt, messages: [{ role: 'user', content: userContent }] });
     } else {
       headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${settings.apiKey}` };
-      body = JSON.stringify({ model: settings.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userContent }], max_tokens: 4096, temperature: 0.8 });
+      body = JSON.stringify({ model: settings.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userContent }], max_tokens: 20000, temperature: 0.8 });
     }
     const res = await fetch(settings.apiUrl, { method: 'POST', headers, body });
     if (!res.ok) return { error: `API 错误: HTTP ${res.status}` };
@@ -384,9 +401,29 @@ ipcMain.handle('optimize-character-card', async (e, modelName, userInput) => {
     const text = settings.provider === 'claude' ? data?.content?.[0]?.text : data?.choices?.[0]?.message?.content;
     if (!text) return { error: 'AI 返回为空' };
 
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return { error: 'AI 返回格式无效:\n' + text.slice(0, 200) };
-    const newCard = JSON.parse(jsonMatch[0]);
+    let jsonStr = (text.match(/\{[\s\S]*\}/) || [])[0];
+    if (!jsonStr) return { error: 'AI 返回格式无效:\n' + text.slice(0, 200) };
+
+    // 尝试修复不完整 JSON（补全缺失的闭合括号）
+    let newCard;
+    try {
+      newCard = JSON.parse(jsonStr);
+    } catch (e) {
+      // 尝试补全
+      const fixed = jsonStr + '"}';
+      try { newCard = JSON.parse(fixed); } catch (e2) {
+        // 尝试提取已存在的字段
+        try {
+          newCard = {
+            name: (jsonStr.match(/"name"\s*:\s*"([^"]*)"/) || [])[1] || modelName,
+            personality: (jsonStr.match(/"personality"\s*:\s*"([\s\S]*?)(?:"\s*[,}])/) || [])[1] || jsonStr.slice(0, 500),
+            firstMessage: (jsonStr.match(/"firstMessage"\s*:\s*"([^"]*)"/) || [])[1] || '你好！',
+          };
+        } catch (e3) {
+          return { error: 'AI 返回的 JSON 无法解析，请重试' };
+        }
+      }
+    }
 
     newCard.version = '1.0';
     fs.writeFileSync(charFile, JSON.stringify(newCard, null, 2), 'utf-8');

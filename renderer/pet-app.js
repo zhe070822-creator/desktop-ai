@@ -52,9 +52,10 @@ async function loadModel(name, url) {
   const modelDir = path.join(__dirname, '..', 'models', name);
   memoryPath = path.join(modelDir, 'memory.json');
   const charFile = path.join(modelDir, 'character.json');
-  if (fs.existsSync(charFile)) {
-    try { character = JSON.parse(fs.readFileSync(charFile, 'utf-8')); } catch(e){}
-  } else {
+  if (!fs.existsSync(charFile)) {
+    try { fs.writeFileSync(charFile, JSON.stringify({ name, version: '1.0', personality: `你是${name}。`, firstMessage: '你好！' }, null, 2), 'utf-8'); } catch(e) {}
+  }
+  try { character = JSON.parse(fs.readFileSync(charFile, 'utf-8')); } catch(e) {
     character = { name, personality: `你是${name}。`, firstMessage: '你好！' };
   }
   memory = { facts: [], messages: [] }; loadMemory();
@@ -96,8 +97,28 @@ async function maybeSummarize() {
 }
 
 // === AI ===
+function getAvailableExpressions() {
+  const expDir = path.join(__dirname, '..', 'models', currentModelName, 'Expressions');
+  try {
+    if (fs.existsSync(expDir)) {
+      return fs.readdirSync(expDir).filter(f => f.endsWith('.exp3.json')).map(f => f.replace('.exp3.json', ''));
+    }
+  } catch(e) {}
+  return [];
+}
+
+function buildSystemPrompt() {
+  const parts = [character?.personality || '你是一个桌面助手。'];
+  const exps = getAvailableExpressions();
+  if (exps.length > 0) {
+    parts.push(`\n你可以通过在你的回复中插入 [表情名] 来切换Live2D表情。可用表情：${exps.map(e => `[${e}]`).join('、')}。在适当的时候使用表情来增强表达。表情标签不会被用户看到。`);
+  }
+  parts.push(buildMemoryContext());
+  return parts.join('\n');
+}
+
 async function chatInternal(userMsg, isSys) {
-  const sys=isSys?userMsg:`${character?.personality||'你是一个桌面助手。'}\n\n${buildMemoryContext()}`;
+  const sys=isSys?userMsg:buildSystemPrompt();
   const msgs=isSys?[{role:'user',content:'请回复'}]:[{role:'user',content:userMsg}];
   let body,headers;
   if(settings.provider==='claude'){
@@ -115,36 +136,31 @@ async function chatInternal(userMsg, isSys) {
 
 async function chatWithAI(userMsg) {
   if(!settings||!settings.apiKey)return'请先配置 API。右键菜单 → API 设置';
-  try{const r=await chatInternal(userMsg,false);addMemory('user',userMsg);addMemory('assistant',r||'');maybeSummarize();applyExpression(r);return r||'(无回复)';}
+  try{const r=await chatInternal(userMsg,false);addMemory('user',userMsg);addMemory('assistant',r||'');maybeSummarize();const display=applyExpression(r);return display||'(无回复)';}
   catch(e){return`[错误] ${e.message}`;}
 }
 
-// === 表情 ===
-const emotionMap = {
-  '开心': '07 星星眼', '高兴': '07 星星眼', '笑': '07 星星眼', '哈哈': '07 星星眼',
-  '害羞': '02 脸红爱心', '脸红': '02 脸红爱心',
-  '生气': '03 生气', '怒': '03 生气',
-  '难过': '08 流泪', '伤心': '08 流泪', '哭': '08 流泪',
-  '惊讶': '06 0.0', '震惊': '06 0.0',
-  '无语': '04 晕', '晕': '04 晕', '困': '04 晕',
-  '得意': '01黑脸', '酷': '01黑脸', '哼': '01黑脸',
-  '吹泡泡': '10 吹泡泡',
-  '要饭': '14 要饭手',
-};
-
+// === 表情：AI 通过 [表情名] 标签控制 ===
 const expCache = {};
 let expressionTimer = null;
 
 function applyExpression(text) {
-  if (!model || !text) return;
-  for (const [keyword, exprName] of Object.entries(emotionMap)) {
-    if (text.includes(keyword)) {
+  if (!model || !text) return text;
+  // 解析 AI 回复中的 [表情名] 标签
+  const expDir = path.join(__dirname, '..', 'models', currentModelName, 'Expressions');
+  const available = getAvailableExpressions();
+  if (available.length === 0) return text;
+
+  const tagRegex = /\[([^\]]+)\]/g;
+  let match;
+  while ((match = tagRegex.exec(text)) !== null) {
+    const tagName = match[1];
+    if (available.includes(tagName)) {
+      const exprName = tagName;
       if (!expCache[exprName]) {
-        const expFile = path.join(__dirname, '..', 'models', currentModelName, 'Expressions', exprName + '.exp3.json');
-        if (fs.existsSync(expFile)) {
-          try { expCache[exprName] = JSON.parse(fs.readFileSync(expFile, 'utf-8')); }
-          catch(e) { expCache[exprName] = null; }
-        } else { expCache[exprName] = null; }
+        const expFile = path.join(expDir, exprName + '.exp3.json');
+        try { expCache[exprName] = JSON.parse(fs.readFileSync(expFile, 'utf-8')); }
+        catch(e) { expCache[exprName] = null; }
       }
       const exp = expCache[exprName];
       if (exp && exp.Parameters) {
@@ -152,17 +168,17 @@ function applyExpression(text) {
         exp.Parameters.forEach(p => {
           try { core.setParameterValueById(p.Id, p.Value, 1); } catch(e) {}
         });
-        // 4 秒后恢复中性表情
         clearTimeout(expressionTimer);
         expressionTimer = setTimeout(() => {
           exp.Parameters.forEach(p => {
             try { core.setParameterValueById(p.Id, 0, 1); } catch(e) {}
           });
-        }, 4000);
+        }, 10000);
       }
-      return;
     }
   }
+  // 移除所有标签，返回纯文本
+  return text.replace(tagRegex, '').trim();
 }
 
 function sendChat() {
