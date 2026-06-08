@@ -1,5 +1,5 @@
 const PIXI = require('pixi.js');
-const { Live2DModel } = require('pixi-live2d-display/cubism4');
+const { Live2DModel, CubismMotion } = require('pixi-live2d-display/cubism4');
 const { ipcRenderer } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -35,6 +35,8 @@ function fitModel() {
 async function loadModel(name, url) {
   currentModelName = name;
   if (model) { app.stage.removeChild(model); model.destroy(); model = null; }
+  Object.keys(expCache).forEach(k => delete expCache[k]);
+  Object.keys(motionCache).forEach(k => delete motionCache[k]);
   show('加载模型...');
   try { model = await Live2DModel.from(url, { autoInteract: false }); }
   catch (e) { show('模型加载失败: '+e.message); return; }
@@ -113,6 +115,10 @@ function buildSystemPrompt() {
   if (exps.length > 0) {
     parts.push(`\n你可以通过在你的回复中插入 [表情名] 来切换Live2D表情。可用表情：${exps.map(e => `[${e}]`).join('、')}。在适当的时候使用表情来增强表达。表情标签不会被用户看到。`);
   }
+  const mots = getAvailableMotions();
+  if (mots.length > 0) {
+    parts.push(`\n你可以通过在你的回复中插入 {动作名} 来播放Live2D动画。可用动作：${mots.map(m => `{${m}}`).join('、')}。在适当的时候使用动作来增强表达（如变身、睡觉等）。动作标签不会被用户看到。`);
+  }
   parts.push(buildMemoryContext());
   return parts.join('\n');
 }
@@ -140,45 +146,88 @@ async function chatWithAI(userMsg) {
   catch(e){return`[错误] ${e.message}`;}
 }
 
-// === 表情：AI 通过 [表情名] 标签控制 ===
+// === 表情 & 动作：AI 通过 [表情名] / {动作名} 标签控制 ===
 const expCache = {};
+const motionCache = {};
 let expressionTimer = null;
+
+function getAvailableMotions() {
+  if (!currentModelName) return [];
+  const motionsDir = path.join(__dirname, '..', 'models', currentModelName, 'Motions');
+  try {
+    if (fs.existsSync(motionsDir)) {
+      return fs.readdirSync(motionsDir).filter(f => f.endsWith('.motion3.json')).map(f => f.replace('.motion3.json', ''));
+    }
+  } catch(e) {}
+  return [];
+}
+
+function playMotion(name) {
+  if (!model) return;
+  const motionsDir = path.join(__dirname, '..', 'models', currentModelName, 'Motions');
+  if (!motionCache[name]) {
+    const motionFile = path.join(motionsDir, name + '.motion3.json');
+    try { motionCache[name] = JSON.parse(fs.readFileSync(motionFile, 'utf-8')); }
+    catch(e) { motionCache[name] = null; return; }
+  }
+  const data = motionCache[name];
+  if (!data) return;
+  try {
+    const motion = CubismMotion.create(data);
+    model.internalModel.motionManager.queueManager.stopAllMotions();
+    model.internalModel.motionManager.queueManager.startMotion(motion, false, performance.now());
+  } catch(e) { console.error('Motion error:', e); }
+}
 
 function applyExpression(text) {
   if (!model || !text) return text;
-  // 解析 AI 回复中的 [表情名] 标签
-  const expDir = path.join(__dirname, '..', 'models', currentModelName, 'Expressions');
-  const available = getAvailableExpressions();
-  if (available.length === 0) return text;
 
-  const tagRegex = /\[([^\]]+)\]/g;
-  let match;
-  while ((match = tagRegex.exec(text)) !== null) {
-    const tagName = match[1];
-    if (available.includes(tagName)) {
-      const exprName = tagName;
-      if (!expCache[exprName]) {
-        const expFile = path.join(expDir, exprName + '.exp3.json');
-        try { expCache[exprName] = JSON.parse(fs.readFileSync(expFile, 'utf-8')); }
-        catch(e) { expCache[exprName] = null; }
-      }
-      const exp = expCache[exprName];
-      if (exp && exp.Parameters) {
-        const core = model.internalModel.coreModel;
-        exp.Parameters.forEach(p => {
-          try { core.setParameterValueById(p.Id, p.Value, 1); } catch(e) {}
-        });
-        clearTimeout(expressionTimer);
-        expressionTimer = setTimeout(() => {
+  // 表情: [表情名]
+  const expDir = path.join(__dirname, '..', 'models', currentModelName, 'Expressions');
+  const expressions = getAvailableExpressions();
+  if (expressions.length > 0) {
+    const expRegex = /\[([^\]]+)\]/g;
+    let match;
+    while ((match = expRegex.exec(text)) !== null) {
+      const tagName = match[1];
+      if (expressions.includes(tagName)) {
+        if (!expCache[tagName]) {
+          const expFile = path.join(expDir, tagName + '.exp3.json');
+          try { expCache[tagName] = JSON.parse(fs.readFileSync(expFile, 'utf-8')); }
+          catch(e) { expCache[tagName] = null; }
+        }
+        const exp = expCache[tagName];
+        if (exp && exp.Parameters) {
+          const core = model.internalModel.coreModel;
           exp.Parameters.forEach(p => {
-            try { core.setParameterValueById(p.Id, 0, 1); } catch(e) {}
+            try { core.setParameterValueById(p.Id, p.Value, 1); } catch(e) {}
           });
-        }, 10000);
+          clearTimeout(expressionTimer);
+          expressionTimer = setTimeout(() => {
+            exp.Parameters.forEach(p => {
+              try { core.setParameterValueById(p.Id, 0, 1); } catch(e) {}
+            });
+          }, 10000);
+        }
       }
     }
   }
+
+  // 动作: {动作名}
+  const motions = getAvailableMotions();
+  if (motions.length > 0) {
+    const motRegex = /\{([^}]+)\}/g;
+    let match;
+    while ((match = motRegex.exec(text)) !== null) {
+      if (motions.includes(match[1])) {
+        playMotion(match[1]);
+        break; // 一次只播一个动作
+      }
+    }
+  }
+
   // 移除所有标签，返回纯文本
-  return text.replace(tagRegex, '').trim();
+  return text.replace(/\[([^\]]+)\]/g, '').replace(/\{([^}]+)\}/g, '').trim();
 }
 
 function sendChat() {
