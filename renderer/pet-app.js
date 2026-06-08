@@ -117,21 +117,7 @@ function buildSystemPrompt() {
   }
   const mots = getAvailableMotions();
   if (mots.length > 0) {
-    // 尝试读取动作说明
-    const motionsDir = path.join(__dirname, '..', 'models', currentModelName, 'Motions');
-    let motionDescs = {};
-    try {
-      const readmeFile = path.join(motionsDir, 'Readme.txt');
-      if (fs.existsSync(readmeFile)) {
-        const content = fs.readFileSync(readmeFile, 'utf-8');
-        content.split('\n').forEach(line => {
-          const m = line.match(/^(.+?\.motion3\.json)\s*:\s*(.+)$/);
-          if (m) motionDescs[m[1].replace('.motion3.json', '')] = m[2].trim();
-        });
-      }
-    } catch(e) {}
-    const motList = mots.map(m => motionDescs[m] ? `{${m}}（${motionDescs[m]}）` : `{${m}}`).join('、');
-    parts.push(`\n你可以通过在你的回复中插入 {动作名} 来播放Live2D动画。可用动作：${motList}。在适当的时候使用动作来增强表达（如变身、唱歌等）。动作标签不会被用户看到。`);
+    parts.push(`\n你可以通过在你的回复中插入 {动作名} 来播放Live2D动画。可用动作：${mots.map(m => `{${m}}`).join('、')}。在适当的时候使用动作来增强表达（如变身、唱歌等）。动作标签不会被用户看到。`);
   }
   parts.push(buildMemoryContext());
   return parts.join('\n');
