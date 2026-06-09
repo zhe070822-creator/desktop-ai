@@ -438,7 +438,7 @@ async function init() {
   window.addEventListener('mouseup',()=>{r=false;});
 
   let clickThrough = await ipcRenderer.invoke('get-click-through');
-  ipcRenderer.on('click-through-changed',(e,v)=>{clickThrough=v;});
+  ipcRenderer.on('click-through-changed',(e,v)=>{clickThrough=v;if(v)chatBar.style.display='none';});
 
   window.addEventListener('contextmenu',e=>{e.preventDefault();contextMenu.style.display='block';contextMenu.style.left=e.clientX+'px';contextMenu.style.top=e.clientY+'px';const items=contextMenu.querySelectorAll('.item');items[0].style.display=isPetMode?'none':'block';items[1].style.display=isPetMode?'block':'none';});
   window.addEventListener('click',()=>{contextMenu.style.display='none';});
