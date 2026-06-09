@@ -226,12 +226,16 @@ function broadcastSize() {
 function toggleMode() {
   isPetMode = !isPetMode;
   if (isPetMode) { petWindow.setResizable(false); petWindow.setSize(PET_W, PET_H); petWindow.setAlwaysOnTop(true, 'screen-saver'); }
-  else { petWindow.setAlwaysOnTop(false); petWindow.setMinimumSize(320, 350); petWindow.setSize(480, 500); }
+  else {
+    if (clickThrough) toggleClickThrough(); // 切到窗口模式自动关闭穿透
+    petWindow.setAlwaysOnTop(false); petWindow.setMinimumSize(320, 350); petWindow.setSize(480, 500);
+  }
   setTimeout(broadcastSize, 150); updateTrayMenu();
 }
 
 function toggleClickThrough() {
   clickThrough = !clickThrough;
+  if (clickThrough && !isPetMode) toggleMode(); // 穿透强制进入宠物模式
   if (petWindow && !petWindow.isDestroyed()) {
     petWindow.setIgnoreMouseEvents(clickThrough);
   }
