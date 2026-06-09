@@ -9,6 +9,7 @@ const SETTINGS_FILE = path.join(CONFIG_DIR, 'settings.enc');
 const PET_W = 340, PET_H = 360;
 let petWindow, setupWindow, tray, modelPort;
 let isPetMode = true;
+let clickThrough = false;
 let activeModel = '';
 let settings = null;
 
@@ -229,6 +230,15 @@ function toggleMode() {
   setTimeout(broadcastSize, 150); updateTrayMenu();
 }
 
+function toggleClickThrough() {
+  clickThrough = !clickThrough;
+  if (petWindow && !petWindow.isDestroyed()) {
+    petWindow.setIgnoreMouseEvents(clickThrough);
+  }
+  if (petWindow) petWindow.webContents.send('click-through-changed', clickThrough);
+  updateTrayMenu();
+}
+
 function switchModel(name) {
   if (activeModel === name) return;
   activeModel = name;
@@ -254,6 +264,8 @@ function updateTrayMenu() {
     { label: '模式', submenu: [
       { label: '宠物模式', type: 'radio', checked: isPetMode, click: () => { if (!isPetMode) toggleMode(); } },
       { label: '窗口模式', type: 'radio', checked: !isPetMode, click: () => { if (isPetMode) toggleMode(); } },
+      { type: 'separator' },
+      { label: '鼠标穿透', type: 'checkbox', checked: clickThrough, click: () => toggleClickThrough() },
     ]},
     { type: 'separator' },
     { label: 'API 设置', click: () => openSetupWindow() },
@@ -308,6 +320,8 @@ ipcMain.handle('get-models', () => scanModels());
 ipcMain.handle('get-model-url', () => getModelUrl(activeModel));
 ipcMain.handle('set-active-model', (e, name) => { activeModel = name; return true; });
 ipcMain.handle('toggle-window-mode', () => { toggleMode(); return isPetMode; });
+ipcMain.handle('toggle-click-through', () => { toggleClickThrough(); return clickThrough; });
+ipcMain.handle('get-click-through', () => clickThrough);
 ipcMain.handle('get-window-bounds', () => {
   if (!petWindow) return {};
   const [x, y] = petWindow.getPosition(); const [w, h] = petWindow.getSize();

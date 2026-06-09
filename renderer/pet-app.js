@@ -437,9 +437,12 @@ async function init() {
   window.addEventListener('mousemove',e=>{if(!r)return;const b={...rs},dx=e.screenX-rs.mouseX,dy=e.screenY-rs.mouseY;if(re.includes('e'))b.width=Math.max(320,b.width+dx);if(re.includes('w')){b.width=Math.max(320,b.width-dx);b.x+=dx;}if(re.includes('s'))b.height=Math.max(350,b.height+dy);if(re.includes('n')){b.height=Math.max(350,b.height-dy);b.y+=dy;}ipcRenderer.send('resize-window',b);});
   window.addEventListener('mouseup',()=>{r=false;});
 
+  let clickThrough = await ipcRenderer.invoke('get-click-through');
+  ipcRenderer.on('click-through-changed',(e,v)=>{clickThrough=v;});
+
   window.addEventListener('contextmenu',e=>{e.preventDefault();contextMenu.style.display='block';contextMenu.style.left=e.clientX+'px';contextMenu.style.top=e.clientY+'px';const items=contextMenu.querySelectorAll('.item');items[0].style.display=isPetMode?'none':'block';items[1].style.display=isPetMode?'block':'none';});
   window.addEventListener('click',()=>{contextMenu.style.display='none';});
-  contextMenu.querySelectorAll('.item').forEach(item=>{item.addEventListener('click',async e=>{e.stopPropagation();contextMenu.style.display='none';const a=item.dataset.action;if(a==='pet-mode'||a==='window-mode'){isPetMode=await ipcRenderer.invoke('toggle-window-mode');document.body.className=isPetMode?'pet-mode loaded':'window-mode';titlebar.style.display=isPetMode?'none':'flex';}else if(a==='setup'){ipcRenderer.send('open-setup');}else if(a==='close')ipcRenderer.send('hide-pet');});});
+  contextMenu.querySelectorAll('.item').forEach(item=>{item.addEventListener('click',async e=>{e.stopPropagation();contextMenu.style.display='none';const a=item.dataset.action;if(a==='pet-mode'||a==='window-mode'){isPetMode=await ipcRenderer.invoke('toggle-window-mode');document.body.className=isPetMode?'pet-mode loaded':'window-mode';titlebar.style.display=isPetMode?'none':'flex';}else if(a==='click-through'){await ipcRenderer.invoke('toggle-click-through');}else if(a==='setup'){ipcRenderer.send('open-setup');}else if(a==='close')ipcRenderer.send('hide-pet');});});
   document.getElementById('btn-pet-mode').addEventListener('click',async()=>{isPetMode=await ipcRenderer.invoke('toggle-window-mode');document.body.className=isPetMode?'pet-mode loaded':'window-mode';titlebar.style.display=isPetMode?'none':'flex';});
   document.getElementById('btn-close').addEventListener('click',()=>ipcRenderer.send('hide-pet'));
 
