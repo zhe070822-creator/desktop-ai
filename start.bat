@@ -8,7 +8,7 @@ echo   Desktop AI - First Run Setup
 echo ============================================
 echo.
 echo   Dependencies need to be installed first.
-echo   This will download about 200MB and may
+echo   This will download about 400MB and may
 echo   take 15 minutes depending on your network.
 echo.
 echo ============================================
