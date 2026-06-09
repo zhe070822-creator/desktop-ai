@@ -13,7 +13,7 @@ if not exist "node_modules\" (
     echo ============================================
     echo.
     set /p confirm="Continue with installation? [Y/n]: "
-    if /i not "%confirm%"=="Y" if /i not "%confirm%"=="" (
+    if /i "%confirm%"=="n" (
         echo Installation cancelled.
         pause
         exit /b
