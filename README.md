@@ -60,6 +60,8 @@
 - [ ] **打包为 exe**：一键安装包，无需装 Node.js 即可运行
 - [ ] **遗忘与强化记忆**：保留全部历史，重要信息被 AI 反复强化，无关内容随时间淡忘，模拟人类记忆机制
 - [ ] 导出/导入角色卡与记忆
+- [ ] **流式 AI 回复 + 打断**：AI 回复以流式逐字显示，显示速度由客户端根据文本长度动态计算。用户可在 AI 说话中途输入内容打断，打断后系统向 API 追加提示：「User interrupted the previous response; the remaining text was not displayed. The user input is as follows:」（远期）
+- [ ] **AI 追问体系**：AI 可在回复中设定 `wait_hint`（秒），-1 表示不等待回复。系统强制最小阈值，低于该值视为无效。若超时用户未回复，客户端自动调用 API 追问，附带上下文：「The user has not responded within N seconds. Input bar has content: [true/false]. The user may be: [typing but silent / not present]. Please follow up naturally.」（远期）
 - [ ] 多语言支持
 - [ ] **多设备兼容**：Windows / macOS / Linux 桌面端，Android / iOS 移动端（远期目标）
 
