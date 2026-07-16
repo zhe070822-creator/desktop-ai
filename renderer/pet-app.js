@@ -18,6 +18,17 @@ let app, model, isPetMode = true, settings = null;
 let character = null, memory = { facts: [], messages: [] }, memoryPath = '';
 let currentModelName = '';
 
+const SEGMENT_MARKER = '❖❖❖';
+
+let streamState = {
+  active: false,
+  segments: [],
+  currentSegIdx: 0,
+  displayTimer: null,
+  fullResponse: '',
+  displayedText: '',
+};
+
 let bubbleTimer = null;
 function show(msg, ms) {
   clearTimeout(bubbleTimer); bubble.textContent = msg; bubble.classList.add('show');
@@ -119,6 +130,7 @@ function buildSystemPrompt() {
   if (mots.length > 0) {
     parts.push(`\n你可以通过在你的回复中插入 {动作名} 来播放Live2D动画。可用动作：${mots.map(m => `{${m}}`).join('、')}。在适当的时候使用动作来增强表达（如变身、唱歌等）。动作标签不会被用户看到。`);
   }
+  parts.push(`\n你可以使用 ${SEGMENT_MARKER}（三个黑色菱形符号）将长回复分割成多个部分，每个部分会依次逐字显示。适合需要节奏感、悬念或多步解释的场景。不是必须的，只在合适时使用。每个部分中仍可使用 [表情名] 和 {动作名} 标签。`);
   parts.push(buildMemoryContext());
   return parts.join('\n');
 }
@@ -142,7 +154,7 @@ async function chatInternal(userMsg, isSys) {
 
 async function chatWithAI(userMsg) {
   if(!settings||!settings.apiKey)return'请先配置 API。右键菜单 → API 设置';
-  try{const r=await chatInternal(userMsg,false);addMemory('user',userMsg);addMemory('assistant',r||'');maybeSummarize();const display=applyExpression(r);return display||'(无回复)';}
+  try{const r=await chatInternal(userMsg,false);addMemory('user',userMsg);addMemory('assistant',r||'');maybeSummarize();return r||'(无回复)';}
   catch(e){return`[错误] ${e.message}`;}
 }
 
@@ -409,10 +421,115 @@ function applyExpression(text) {
   return text.replace(/\[([^\]]+)\]/g, '').replace(/\{([^}]+)\}/g, '').trim();
 }
 
+// === 流式显示 ===
+function calcDisplayDelay(text) {
+  const len = (text || '').length;
+  if (len <= 10) return 120;
+  if (len <= 30) return 80;
+  if (len <= 80) return 50;
+  return 30;
+}
+
+function clearStream() {
+  streamState.active = false;
+  if (streamState.displayTimer) { clearTimeout(streamState.displayTimer); streamState.displayTimer = null; }
+  streamState.segments = [];
+  streamState.currentSegIdx = 0;
+  streamState.fullResponse = '';
+  streamState.displayedText = '';
+}
+
+function handleAIResponse(rawText) {
+  clearStream();
+  if (!rawText || rawText.startsWith('[错误]')) { show(rawText, 8000); return; }
+
+  const segments = rawText.split(SEGMENT_MARKER).filter(s => s.trim());
+  if (segments.length <= 1) {
+    // 无分段标记，普通显示
+    const display = applyExpression(rawText);
+    show(display, 8000);
+    return;
+  }
+
+  // 有分段，流式显示
+  streamState.active = true;
+  streamState.segments = segments;
+  streamState.currentSegIdx = 0;
+  streamState.fullResponse = rawText;
+  streamState.displayedText = '';
+  displayNextSegment();
+}
+
+function displayNextSegment() {
+  if (!streamState.active) return;
+  if (streamState.currentSegIdx >= streamState.segments.length) {
+    // 全部播完
+    streamState.active = false;
+    if (bubbleTimer) clearTimeout(bubbleTimer);
+    bubbleTimer = setTimeout(() => bubble.classList.remove('show'), 5000);
+    return;
+  }
+
+  const segment = streamState.segments[streamState.currentSegIdx];
+  // 对当前段触发表情/动作，并获取纯净文本
+  const cleanText = applyExpression(segment);
+  if (!cleanText) {
+    // 纯标签段，直接下一段
+    streamState.currentSegIdx++;
+    streamState.displayedText += segment;
+    streamState.displayTimer = setTimeout(() => displayNextSegment(), 100);
+    return;
+  }
+
+  const perCharDelay = calcDisplayDelay(cleanText);
+  let charIdx = 0;
+  bubble.classList.add('show');
+
+  function showNextChar() {
+    if (!streamState.active) return; // 被打断
+    if (charIdx >= cleanText.length) {
+      // 当前段播完
+      streamState.displayedText += segment;
+      streamState.currentSegIdx++;
+      streamState.displayTimer = setTimeout(() => displayNextSegment(), 400);
+      return;
+    }
+    charIdx++;
+    bubble.textContent = cleanText.substring(0, charIdx);
+    streamState.displayTimer = setTimeout(showNextChar, perCharDelay);
+  }
+  showNextChar();
+}
+
+function interruptStream() {
+  if (!streamState.active) return '';
+  streamState.active = false;
+  if (streamState.displayTimer) { clearTimeout(streamState.displayTimer); streamState.displayTimer = null; }
+  // 计算被打断时还没显示的内容
+  const notDisplayed = streamState.fullResponse.substring(streamState.displayedText.length).trim();
+  clearStream();
+  return notDisplayed;
+}
+
+// === 发送消息 ===
 function sendChat() {
-  const msg=chatInput.value.trim();if(!msg)return;
-  chatInput.value='';chatBar.style.display='none';show('...',999999);
-  chatWithAI(msg).then(r=>show(r,8000));
+  const msg = chatInput.value.trim(); if (!msg) return;
+  chatInput.value = ''; chatBar.style.display = 'none';
+
+  // 如果正在流式显示，打断它
+  let interruptNote = '';
+  if (streamState.active) {
+    interruptNote = interruptStream();
+  }
+
+  show('...', 999999);
+
+  let effectiveMsg = msg;
+  if (interruptNote) {
+    effectiveMsg = `[The user interrupted your previous response. The following text was queued but NOT displayed to the user: "${interruptNote}"]\n\nUser now says: ${msg}`;
+  }
+
+  chatWithAI(effectiveMsg).then(r => handleAIResponse(r));
 }
 
 // === 初始化 ===

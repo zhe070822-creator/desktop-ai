@@ -490,6 +490,45 @@ ipcMain.on('open-setup', () => openSetupWindow());
 ipcMain.on('hide-pet', () => { if (petWindow) petWindow.hide(); });
 ipcMain.on('quit-app', () => { app.isQuitting = true; app.quit(); });
 
+// === 导出/导入角色卡与记忆 ===
+ipcMain.handle('export-character', async (e, modelName, exportData) => {
+  if (!setupWindow || setupWindow.isDestroyed()) return null;
+  const result = await dialog.showSaveDialog(setupWindow, {
+    title: '导出角色卡与记忆',
+    defaultPath: `${modelName}-export.json`,
+    filters: [{ name: '角色卡导出', extensions: ['json'] }],
+  });
+  if (result.canceled) return null;
+  try {
+    fs.writeFileSync(result.filePath, JSON.stringify(exportData, null, 2), 'utf-8');
+    return { success: true };
+  } catch (e) {
+    return { error: `写入失败: ${e.message}` };
+  }
+});
+
+ipcMain.handle('import-character', async () => {
+  if (!setupWindow || setupWindow.isDestroyed()) return null;
+  const result = await dialog.showOpenDialog(setupWindow, {
+    title: '导入角色卡与记忆',
+    filters: [{ name: '角色卡导出', extensions: ['json'] }],
+    properties: ['openFile'],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  try {
+    const data = JSON.parse(fs.readFileSync(result.filePaths[0], 'utf-8'));
+    if (data.type !== 'desktop-ai-export') {
+      return { error: '无效的导出文件格式' };
+    }
+    if (!data.character || !data.character.name) {
+      return { error: '导出文件中缺少角色卡数据' };
+    }
+    return { success: true, data };
+  } catch (e) {
+    return { error: `读取失败: ${e.message}` };
+  }
+});
+
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   if (!fs.existsSync(MODELS_DIR)) fs.mkdirSync(MODELS_DIR, { recursive: true });

@@ -1,4 +1,8 @@
 const { ipcRenderer } = require('electron');
+const path = require('path');
+const fs = require('fs');
+
+const MODELS_DIR = path.join(__dirname, '..', 'models');
 
 const providerEl = document.getElementById('provider');
 const apikeyEl = document.getElementById('apikey');
@@ -11,6 +15,8 @@ const optimizeBtn = document.getElementById('optimize-btn');
 const optimizeInput = document.getElementById('optimize-input');
 const importCharfileBtn = document.getElementById('import-charfile-btn');
 const importMultiBtn = document.getElementById('import-multi-btn');
+const exportBtn = document.getElementById('export-btn');
+const importDataBtn = document.getElementById('import-data-btn');
 const statusEl = document.getElementById('status');
 
 const defaults = {
@@ -108,6 +114,98 @@ optimizeBtn.addEventListener('click', async () => {
   status('角色卡已优化！');
   await refreshModels();
   modelSelectEl.value = modelName;
+});
+
+// === 导出/导入 ===
+exportBtn.addEventListener('click', async () => {
+  const modelName = modelSelectEl.value;
+  if (!modelName) { status('请先选择模型'); return; }
+
+  const modelDir = path.join(MODELS_DIR, modelName);
+  const charFile = path.join(modelDir, 'character.json');
+  const memFile = path.join(modelDir, 'memory.json');
+
+  let character = null;
+  let memory = null;
+
+  try {
+    if (fs.existsSync(charFile)) {
+      character = JSON.parse(fs.readFileSync(charFile, 'utf-8'));
+    }
+  } catch (e) { status(`读取角色卡失败: ${e.message}`); return; }
+
+  try {
+    if (fs.existsSync(memFile)) {
+      memory = JSON.parse(fs.readFileSync(memFile, 'utf-8'));
+    }
+  } catch (e) { /* 记忆文件可能损坏，不影响导出 */ }
+
+  const exportData = {
+    type: 'desktop-ai-export',
+    version: 1,
+    modelName,
+    exportDate: new Date().toISOString(),
+    character,
+    memory: memory || { facts: [], messages: [] },
+  };
+
+  status('正在导出...');
+  const result = await ipcRenderer.invoke('export-character', modelName, exportData);
+  if (!result) { status('已取消'); return; }
+  if (result.error) { status(`导出失败: ${result.error}`); return; }
+  status('导出成功！');
+});
+
+importDataBtn.addEventListener('click', async () => {
+  const modelName = modelSelectEl.value;
+  if (!modelName) { status('请先选择模型'); return; }
+
+  status('正在导入...');
+  const result = await ipcRenderer.invoke('import-character');
+  if (!result) { status('已取消'); return; }
+  if (result.error) { status(`导入失败: ${result.error}`); return; }
+
+  const { data } = result;
+  const modelDir = path.join(MODELS_DIR, modelName);
+  const charFile = path.join(modelDir, 'character.json');
+  const memFile = path.join(modelDir, 'memory.json');
+
+  try {
+    // 备份旧文件
+    if (fs.existsSync(charFile)) {
+      fs.writeFileSync(charFile + '.bak', fs.readFileSync(charFile));
+    }
+    if (fs.existsSync(memFile)) {
+      fs.writeFileSync(memFile + '.bak', fs.readFileSync(memFile));
+    }
+
+    // 写入导入的数据
+    fs.writeFileSync(charFile, JSON.stringify(data.character, null, 2), 'utf-8');
+    if (data.memory) {
+      fs.writeFileSync(memFile, JSON.stringify(data.memory, null, 2), 'utf-8');
+    }
+
+    // 清理备份（导入成功）
+    try { if (fs.existsSync(charFile + '.bak')) fs.unlinkSync(charFile + '.bak'); } catch (e) {}
+    try { if (fs.existsSync(memFile + '.bak')) fs.unlinkSync(memFile + '.bak'); } catch (e) {}
+
+    await refreshModels();
+    modelSelectEl.value = modelName;
+    status(`导入成功！角色"${data.character.name}"的设定与记忆已恢复。`);
+  } catch (e) {
+    // 回滚
+    try {
+      if (fs.existsSync(charFile + '.bak')) {
+        fs.writeFileSync(charFile, fs.readFileSync(charFile + '.bak'));
+        fs.unlinkSync(charFile + '.bak');
+      }
+      if (fs.existsSync(memFile + '.bak')) {
+        fs.writeFileSync(memFile, fs.readFileSync(memFile + '.bak'));
+        fs.unlinkSync(memFile + '.bak');
+      }
+    } catch (_) {}
+    status(`导入失败: ${e.message}`);
+  }
 });
 
 saveBtn.addEventListener('click', async () => {
