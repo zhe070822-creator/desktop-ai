@@ -17,6 +17,7 @@ const importCharfileBtn = document.getElementById('import-charfile-btn');
 const importMultiBtn = document.getElementById('import-multi-btn');
 const exportBtn = document.getElementById('export-btn');
 const importDataBtn = document.getElementById('import-data-btn');
+const testBtn = document.getElementById('test-btn');
 const statusEl = document.getElementById('status');
 
 const defaults = {
@@ -107,7 +108,14 @@ optimizeBtn.addEventListener('click', async () => {
   if (!userInput) { status('请先输入新角色描述或导入文件'); return; }
   status('正在调用 AI 优化角色卡...');
   optimizeBtn.disabled = true;
-  const result = await ipcRenderer.invoke('optimize-character-card', modelName, userInput);
+  // 问题2：把当前表单的 API 配置一起传过去，无需先点"保存并启动"
+  const formApiConfig = {
+    provider: providerEl.value,
+    apiKey: apikeyEl.value.trim(),
+    apiUrl: apiurlEl.value.trim() || defaults[providerEl.value].url,
+    model: modelNameEl.value.trim() || defaults[providerEl.value].model,
+  };
+  const result = await ipcRenderer.invoke('optimize-character-card', modelName, userInput, formApiConfig);
   optimizeBtn.disabled = false;
   checkOptimizeInput();
   if (result.error) { status(`优化失败: ${result.error}`); return; }
@@ -238,6 +246,26 @@ importDataBtn.addEventListener('click', async () => {
   }
 });
 
+testBtn.addEventListener('click', async () => {
+  const apiConfig = {
+    provider: providerEl.value,
+    apiKey: apikeyEl.value.trim(),
+    apiUrl: apiurlEl.value.trim() || defaults[providerEl.value].url,
+    model: modelNameEl.value.trim() || defaults[providerEl.value].model,
+  };
+  if (!apiConfig.apiKey) { status('请先填写 API Key'); return; }
+  if (!apiConfig.apiUrl) { status('请先填写 API 地址'); return; }
+  status('正在测试连接...');
+  testBtn.disabled = true;
+  const result = await ipcRenderer.invoke('test-api-connection', apiConfig);
+  testBtn.disabled = false;
+  if (result.error) {
+    status(`❌ ${result.error}`);
+  } else {
+    status('✅ 连接成功！API 配置有效。');
+  }
+});
+
 saveBtn.addEventListener('click', async () => {
   const data = {
     provider: providerEl.value, apiKey: apikeyEl.value.trim(),
@@ -247,8 +275,20 @@ saveBtn.addEventListener('click', async () => {
   };
   if (!data.activeModel) { status('请选择模型或先导入模型'); return; }
   if (!data.apiKey) { status('请输入 API Key'); return; }
-  status('保存中...');
+
+  // 保存前先测试连接
+  status('正在测试 API 连接...');
+  saveBtn.disabled = true;
+  const testResult = await ipcRenderer.invoke('test-api-connection', data);
+  if (testResult.error) {
+    saveBtn.disabled = false;
+    status(`❌ 连接失败: ${testResult.error}\n请检查 API 配置后再试。`);
+    return;
+  }
+
+  status('连接成功，正在保存...');
   await ipcRenderer.invoke('save-settings', data);
+  // save-settings 成功后会自动关闭窗口，无需恢复按钮
 });
 
 init().catch(e => status('初始化失败: ' + e.message));
