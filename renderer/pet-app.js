@@ -26,8 +26,16 @@ let streamState = {
   currentSegIdx: 0,
   displayTimer: null,
   fullResponse: '',
-  displayedText: '',
+  displayedRawPos: 0,        // 已完成的原始文本在 fullResponse 中的结束位置（精确偏移量）
+  currentSegmentRaw: '',     // 当前正在显示的 segment 原始文本
+  currentSegmentClean: '',   // 当前 segment 的 clean 文本（去标签后）
+  currentSegStartPos: 0,     // 当前 segment 在 fullResponse 中的起始位置
+  currentDisplayedClean: 0,  // 当前 segment 已显示的 clean 字符数
+  currentCleanLen: 0,        // 当前 segment 的 clean 文本总长度
 };
+
+let chatLock = false;  // 防止并发 API 调用
+let pendingInterrupt = false;  // 标记刚打断了 AI，回复后自动显示 chat bar
 
 let bubbleTimer = null;
 function show(msg, ms) {
@@ -130,7 +138,12 @@ function buildSystemPrompt() {
   if (mots.length > 0) {
     parts.push(`\n你可以通过在你的回复中插入 {动作名} 来播放Live2D动画。可用动作：${mots.map(m => `{${m}}`).join('、')}。在适当的时候使用动作来增强表达（如变身、唱歌等）。动作标签不会被用户看到。`);
   }
-  parts.push(`\n你可以使用 ${SEGMENT_MARKER}（三个黑色菱形符号）将长回复分割成多个部分，每个部分会依次逐字显示。适合需要节奏感、悬念或多步解释的场景。不是必须的，只在合适时使用。每个部分中仍可使用 [表情名] 和 {动作名} 标签。`);
+  parts.push(`\n【重要】你必须使用 ${SEGMENT_MARKER}（三个黑色菱形符号）来分割回复。规则：`);
+  parts.push(`1. 每个分段控制在50-80字以内，不要一句话太长`);
+  parts.push(`2. 每个分段之间用单独的 ${SEGMENT_MARKER} 行隔开`);
+  parts.push(`3. 每个分段可以独立使用 [表情名] 和 {动作名} 标签，实现一段一个表情/动作`);
+  parts.push(`4. 短回复（1-2句话）可以不分段，但3句及以上必须分段`);
+  parts.push(`5. ${SEGMENT_MARKER} 本身不会被用户看到，用户看到的是逐段显示的纯净文本`);
   parts.push(buildMemoryContext());
   return parts.join('\n');
 }
@@ -152,9 +165,11 @@ async function chatInternal(userMsg, isSys) {
   return settings.provider==='claude'?d?.content?.[0]?.text:d?.choices?.[0]?.message?.content;
 }
 
-async function chatWithAI(userMsg) {
+async function chatWithAI(userMsg, memoryMsg) {
+  // userMsg: 发送给 API 的消息（可能含打断注释等上下文）
+  // memoryMsg: 存入记忆的用户消息（纯净文本，可选，默认用 userMsg）
   if(!settings||!settings.apiKey)return'请先配置 API。右键菜单 → API 设置';
-  try{const r=await chatInternal(userMsg,false);addMemory('user',userMsg);addMemory('assistant',r||'');maybeSummarize();return r||'(无回复)';}
+  try{const r=await chatInternal(userMsg,false);addMemory('user',memoryMsg||userMsg);addMemory('assistant',r||'');maybeSummarize();return r||'(无回复)';}
   catch(e){return`[错误] ${e.message}`;}
 }
 
@@ -424,19 +439,29 @@ function applyExpression(text) {
 // === 流式显示 ===
 function calcDisplayDelay(text) {
   const len = (text || '').length;
-  if (len <= 10) return 120;
-  if (len <= 30) return 80;
-  if (len <= 80) return 50;
-  return 30;
+  // 动态速度：短句慢（每字有分量），长句稍快（自然阅读节奏）
+  // 最短约 2s 显示时间，确保用户能看清
+  if (len <= 6) return 330;     // ~2s
+  if (len <= 15) return 140;    // ~2.1s
+  if (len <= 40) return 60;     // ~2.4s
+  if (len <= 80) return 40;     // ~3.2s
+  return 30;                     // 自然节奏
 }
 
 function clearStream() {
   streamState.active = false;
   if (streamState.displayTimer) { clearTimeout(streamState.displayTimer); streamState.displayTimer = null; }
   streamState.segments = [];
+  streamState._segPositions = [];
   streamState.currentSegIdx = 0;
   streamState.fullResponse = '';
-  streamState.displayedText = '';
+  streamState.displayedRawPos = 0;
+  streamState.currentSegmentRaw = '';
+  streamState.currentSegmentClean = '';
+  streamState._cleanToRawMap = null;
+  streamState.currentSegStartPos = 0;
+  streamState.currentDisplayedClean = 0;
+  streamState.currentCleanLen = 0;
 }
 
 function handleAIResponse(rawText) {
@@ -452,12 +477,49 @@ function handleAIResponse(rawText) {
   }
 
   // 有分段，流式显示
+  // 预计算每个 segment 在 fullResponse 中的起始位置（用于精确打断追踪）
+  const segPositions = [];
+  let searchFrom = 0;
+  for (const seg of segments) {
+    const pos = rawText.indexOf(seg, searchFrom);
+    segPositions.push(pos >= 0 ? pos : searchFrom);
+    searchFrom = (pos >= 0 ? pos : searchFrom) + seg.length;
+  }
+
   streamState.active = true;
   streamState.segments = segments;
+  streamState._segPositions = segPositions;  // 内部使用
   streamState.currentSegIdx = 0;
   streamState.fullResponse = rawText;
-  streamState.displayedText = '';
+  streamState.displayedRawPos = 0;
   displayNextSegment();
+}
+
+// 建立 clean→raw 位置映射：模拟 applyExpression 的标签剥离
+// 返回数组 map[i] = clean 第 i 个字符在 raw 文本中的位置
+// 忽略 trim 的前导空白，确保 map[0] 指向 clean 文本第一个可见字符
+function buildCleanToRawMap(rawText) {
+  const map = [];
+  let i = 0;
+  while (i < rawText.length) {
+    if (rawText[i] === '[') {
+      const end = rawText.indexOf(']', i);
+      if (end >= 0) { i = end + 1; continue; }
+    }
+    if (rawText[i] === '{') {
+      const end = rawText.indexOf('}', i);
+      if (end >= 0) { i = end + 1; continue; }
+    }
+    map.push(i);
+    i++;
+  }
+  // 修剪前导空白以匹配 applyExpression 的 .trim() 行为
+  let trimStart = 0;
+  while (trimStart < map.length && /\s/.test(rawText[map[trimStart]])) {
+    trimStart++;
+  }
+  if (trimStart > 0) map.splice(0, trimStart);
+  return map;
 }
 
 function displayNextSegment() {
@@ -465,36 +527,62 @@ function displayNextSegment() {
   if (streamState.currentSegIdx >= streamState.segments.length) {
     // 全部播完
     streamState.active = false;
+    streamState.currentSegmentRaw = '';
     if (bubbleTimer) clearTimeout(bubbleTimer);
     bubbleTimer = setTimeout(() => bubble.classList.remove('show'), 5000);
+    // 如果之前打断了 AI，播完后自动显示聊天栏
+    if (pendingInterrupt) {
+      pendingInterrupt = false;
+      chatBar.style.display = 'flex';
+      chatInput.focus();
+    }
     return;
   }
 
-  const segment = streamState.segments[streamState.currentSegIdx];
+  const idx = streamState.currentSegIdx;
+  const segment = streamState.segments[idx];
+  const segStartPos = streamState._segPositions ? streamState._segPositions[idx] : streamState.displayedRawPos;
+
   // 对当前段触发表情/动作，并获取纯净文本
   const cleanText = applyExpression(segment);
   if (!cleanText) {
-    // 纯标签段，直接下一段
+    // 纯标签段，直接跳到下一段
+    streamState.displayedRawPos = segStartPos + segment.length;
     streamState.currentSegIdx++;
-    streamState.displayedText += segment;
     streamState.displayTimer = setTimeout(() => displayNextSegment(), 100);
     return;
   }
 
-  const perCharDelay = calcDisplayDelay(cleanText);
+  // 追踪当前段，用于精确打断计算
+  streamState.currentSegmentRaw = segment;
+  streamState.currentSegmentClean = cleanText;
+  streamState.currentSegStartPos = segStartPos;
+  streamState.currentDisplayedClean = 0;
+  streamState.currentCleanLen = cleanText.length;
+  // 建立 clean→raw 位置映射：clean 第 i 个字符对应 raw 中的哪个位置
+  streamState._cleanToRawMap = buildCleanToRawMap(segment);
+
+  const MIN_PER_CHAR_MS = 50;  // 每字最低延迟（速度上限 ~20字/秒）
+  const perCharDelay = Math.max(calcDisplayDelay(cleanText), MIN_PER_CHAR_MS);
   let charIdx = 0;
   bubble.classList.add('show');
 
   function showNextChar() {
     if (!streamState.active) return; // 被打断
     if (charIdx >= cleanText.length) {
-      // 当前段播完
-      streamState.displayedText += segment;
+      // 当前段播完：更新精确偏移量（跳过当前原始段文本）
+      streamState.displayedRawPos = segStartPos + segment.length;
+      streamState.currentSegmentRaw = '';
+      streamState.currentDisplayedClean = 0;
+      streamState.currentCleanLen = 0;
       streamState.currentSegIdx++;
-      streamState.displayTimer = setTimeout(() => displayNextSegment(), 400);
+      // 段间间隔动态计算：短句短间隔，长句长间隔（~0.2s~0.5s）
+      const segGap = Math.max(200, Math.min(500, cleanText.length * 8));
+      streamState.displayTimer = setTimeout(() => displayNextSegment(), segGap);
       return;
     }
     charIdx++;
+    streamState.currentDisplayedClean = charIdx;
     bubble.textContent = cleanText.substring(0, charIdx);
     streamState.displayTimer = setTimeout(showNextChar, perCharDelay);
   }
@@ -505,21 +593,59 @@ function interruptStream() {
   if (!streamState.active) return '';
   streamState.active = false;
   if (streamState.displayTimer) { clearTimeout(streamState.displayTimer); streamState.displayTimer = null; }
-  // 计算被打断时还没显示的内容
-  const notDisplayed = streamState.fullResponse.substring(streamState.displayedText.length).trim();
+
+  let notDisplayed;
+  const displayed = streamState.currentDisplayedClean;
+  const map = streamState._cleanToRawMap;
+
+  if (map && displayed > 0 && displayed <= map.length) {
+    // 发生在 segment 中途：用 clean→raw 映射精确查表
+    // map[displayed - 1] = 第 displayed 个 clean 字符在 raw segment 中的位置
+    const rawDisplayed = map[displayed - 1] + 1;  // +1 跳过该字符本身
+    const cutoffPos = streamState.currentSegStartPos + rawDisplayed;
+    notDisplayed = streamState.fullResponse.substring(cutoffPos).trim();
+  } else if (streamState.currentSegmentRaw && displayed > 0 && !map) {
+    // 无映射表（极少见），fallback 到 indexOf
+    const rawSeg = streamState.currentSegmentRaw;
+    const cleanText = streamState.currentSegmentClean;
+    if (cleanText) {
+      const cleanStartInRaw = rawSeg.indexOf(cleanText);
+      if (cleanStartInRaw >= 0) {
+        const ratio = displayed / (streamState.currentCleanLen || 1);
+        const rawDisplayed = cleanStartInRaw + Math.floor(cleanText.length * ratio);
+        const cutoffPos = streamState.currentSegStartPos + rawDisplayed;
+        notDisplayed = streamState.fullResponse.substring(cutoffPos).trim();
+      } else {
+        notDisplayed = streamState.fullResponse.substring(streamState.displayedRawPos).trim();
+      }
+    } else {
+      notDisplayed = streamState.fullResponse.substring(streamState.displayedRawPos).trim();
+    }
+  } else {
+    // 发生在 segment 间隙或开始前：使用已完成段的精确偏移量
+    notDisplayed = streamState.fullResponse.substring(streamState.displayedRawPos).trim();
+  }
+
   clearStream();
   return notDisplayed;
 }
 
 // === 发送消息 ===
-function sendChat() {
+async function sendChat() {
   const msg = chatInput.value.trim(); if (!msg) return;
-  chatInput.value = ''; chatBar.style.display = 'none';
+
+  // 并发守卫：如果上一个 API 调用还在进行中，忽略本次发送
+  if (chatLock) return;
+  chatLock = true;
+
+  chatInput.value = '';
+  chatBar.style.display = 'none';
 
   // 如果正在流式显示，打断它
   let interruptNote = '';
   if (streamState.active) {
     interruptNote = interruptStream();
+    pendingInterrupt = true;
   }
 
   show('...', 999999);
@@ -529,7 +655,22 @@ function sendChat() {
     effectiveMsg = `[The user interrupted your previous response. The following text was queued but NOT displayed to the user: "${interruptNote}"]\n\nUser now says: ${msg}`;
   }
 
-  chatWithAI(effectiveMsg).then(r => handleAIResponse(r));
+  try {
+    const r = await chatWithAI(effectiveMsg, msg);  // effectiveMsg 给 API，msg 存入记忆
+    handleAIResponse(r);
+    // 非打断情况下，回复完成后自动显示聊天栏
+    if (!pendingInterrupt) {
+      chatBar.style.display = 'flex';
+      chatInput.focus();
+    }
+    // pendingInterrupt 的情况由 displayNextSegment 在全部播完后处理
+  } catch (e) {
+    show(`[错误] ${e.message}`, 8000);
+    chatBar.style.display = 'flex';
+    chatInput.focus();
+  } finally {
+    chatLock = false;
+  }
 }
 
 // === 初始化 ===
