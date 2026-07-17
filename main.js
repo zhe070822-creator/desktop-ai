@@ -413,14 +413,45 @@ ipcMain.handle('import-model', async () => {
   } catch (e) { return { error: e.message }; }
 });
 
-ipcMain.handle('optimize-character-card', async (e, modelName, userInput) => {
+ipcMain.handle('test-api-connection', async (e, apiConfig) => {
+  if (!apiConfig || !apiConfig.apiKey) return { error: '请先填写 API Key' };
+  try {
+    let headers, body;
+    if (apiConfig.provider === 'claude') {
+      headers = { 'Content-Type': 'application/json', 'x-api-key': apiConfig.apiKey, 'anthropic-version': '2023-06-01' };
+      body = JSON.stringify({ model: apiConfig.model, max_tokens: 1, messages: [{ role: 'user', content: 'Hi' }] });
+    } else {
+      headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` };
+      body = JSON.stringify({ model: apiConfig.model, messages: [{ role: 'user', content: 'Hi' }], max_tokens: 1 });
+    }
+    const res = await fetch(apiConfig.apiUrl, { method: 'POST', headers, body, signal: AbortSignal.timeout(10000) });
+    if (!res.ok) {
+      // 安全：401/403 不显示响应体（可能泄露 Key），其他错误只显示状态码
+      if (res.status === 401 || res.status === 403) {
+        return { error: `API Key 无效或被拒绝 (HTTP ${res.status})` };
+      }
+      return { error: `API 返回 HTTP ${res.status}，请检查地址和模型名称` };
+    }
+    return { success: true };
+  } catch (e) {
+    return { error: `连接失败: ${e.message}` };
+  }
+});
+
+ipcMain.handle('optimize-character-card', async (e, modelName, userInput, apiConfig) => {
   const modelDir = path.join(MODELS_DIR, modelName);
   const charFile = path.join(modelDir, 'character.json');
-  if (!fs.existsSync(charFile)) return { error: '该模型没有角色卡' };
+
+  // 问题1：如果没有角色卡，自动生成默认的
+  if (!fs.existsSync(charFile)) {
+    ensureCharacterCard(modelDir, modelName);
+  }
 
   const current = JSON.parse(fs.readFileSync(charFile, 'utf-8'));
-  const settings = loadSettings();
-  if (!settings || !settings.apiKey) return { error: '请先配置 API' };
+
+  // 问题2：优先使用表单传入的 API 配置，fallback 到已保存的设置
+  const settings = apiConfig && apiConfig.apiKey ? apiConfig : loadSettings();
+  if (!settings || !settings.apiKey) return { error: '请先填写 API Key 并保存，或点击"保存并启动"' };
 
   if (!userInput) return { error: '请提供角色描述' };
 

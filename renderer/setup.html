@@ -7,7 +7,7 @@
   body {
     background:#1a1a2e; color:#ddd; font-family:-apple-system,'Microsoft YaHei',sans-serif;
     display:flex; flex-direction:column; align-items:center; justify-content:center;
-    height:100vh; user-select:none;
+    min-height:100vh; padding:24px 0; user-select:none;
   }
   h2 { color:#9b59b6; margin-bottom:20px; font-size:20px; }
   .form { width:380px; display:flex; flex-direction:column; gap:12px; }
@@ -74,9 +74,12 @@
     </div>
     <div class="hint">导出包含当前角色的设定与 AI 记忆。导入将覆盖当前角色的设定与记忆。</div>
 
-    <div id="status"></div>
+    <div style="display:flex;gap:8px">
+      <button id="test-btn" class="secondary" style="flex:1">测试连接</button>
+      <button id="save-btn" style="flex:1">保存并启动</button>
+    </div>
 
-    <button id="save-btn">保存并启动</button>
+    <div id="status"></div>
   </div>
   <script src="setup-app.js"></script>
 </body>
