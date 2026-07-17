@@ -127,6 +127,10 @@ Electron + PixiJS + pixi-live2d-display + Live2D Cubism Core
 - 如果你真的逐字读完了这段免责声明，建议你出门走走。或者继续和桌面 AI 聊天，也行。
 - 对了，如果你不同意以上条款……放轻松，这只是一个桌面宠物软件。
 
+## 作者
+
+Jestions & Claude
+
 ## License
 
 ISC
