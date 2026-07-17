@@ -102,6 +102,18 @@ async function importModel() {
     return;
   }
 
+  // 验证 JSON 格式
+  try { JSON.parse(fs.readFileSync(modelFile, 'utf-8')); }
+  catch (e) { dialog.showErrorBox('导入失败', `"${modelName}.model3.json" 格式无效：${e.message}`); return; }
+
+  // 验证 .moc3 文件
+  const modelJson = JSON.parse(fs.readFileSync(modelFile, 'utf-8'));
+  const mocFile = modelJson.FileReferences?.Moc;
+  if (!mocFile || !fs.existsSync(path.join(srcDir, mocFile))) {
+    dialog.showErrorBox('导入失败', `缺少模型文件 "${mocFile || '未指定'}"，无法加载 Live2D 模型。`);
+    return;
+  }
+
   const destDir = path.join(MODELS_DIR, modelName);
   if (fs.existsSync(destDir)) {
     const { response } = await dialog.showMessageBox(petWindow, {
@@ -113,7 +125,18 @@ async function importModel() {
   }
 
   // 复制
-  copyDirSync(srcDir, destDir);
+  try {
+    copyDirSync(srcDir, destDir);
+
+    // 验证复制结果
+    if (!fs.existsSync(path.join(destDir, `${modelName}.model3.json`))) {
+      throw new Error('复制后验证失败');
+    }
+  } catch (e) {
+    try { if (fs.existsSync(destDir)) fs.rmSync(destDir, { recursive: true, force: true }); } catch (_) {}
+    dialog.showErrorBox('导入失败', `复制模型文件时出错：${e.message}`);
+    return;
+  }
 
   // 自动生成
   ensureCharacterCard(destDir, modelName);
@@ -523,10 +546,30 @@ ipcMain.handle('import-character', async () => {
     if (!data.character || !data.character.name) {
       return { error: '导出文件中缺少角色卡数据' };
     }
+    // 规范化 memory 格式（兼容旧版纯数组格式）
+    if (data.memory) {
+      if (Array.isArray(data.memory)) {
+        data.memory = { facts: [], messages: data.memory };
+      } else {
+        data.memory.facts = data.memory.facts || [];
+        data.memory.messages = data.memory.messages || [];
+      }
+    }
     return { success: true, data };
   } catch (e) {
     return { error: `读取失败: ${e.message}` };
   }
+});
+
+ipcMain.handle('confirm-dialog', async (e, title, message) => {
+  if (!setupWindow || setupWindow.isDestroyed()) return false;
+  const { response } = await dialog.showMessageBox(setupWindow, {
+    type: 'warning',
+    buttons: ['确认', '取消'],
+    title,
+    message,
+  });
+  return response === 0;
 });
 
 app.whenReady().then(async () => {

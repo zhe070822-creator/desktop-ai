@@ -134,11 +134,21 @@ exportBtn.addEventListener('click', async () => {
     }
   } catch (e) { status(`读取角色卡失败: ${e.message}`); return; }
 
+  if (!character) { status('该模型没有角色卡可导出'); return; }
+
   try {
     if (fs.existsSync(memFile)) {
-      memory = JSON.parse(fs.readFileSync(memFile, 'utf-8'));
+      const raw = JSON.parse(fs.readFileSync(memFile, 'utf-8'));
+      // 规范化格式：兼容旧版纯数组 memory
+      if (Array.isArray(raw)) {
+        memory = { facts: [], messages: raw };
+      } else {
+        memory = { facts: raw.facts || [], messages: raw.messages || [] };
+      }
     }
   } catch (e) { /* 记忆文件可能损坏，不影响导出 */ }
+
+  if (!memory) memory = { facts: [], messages: [] };
 
   const exportData = {
     type: 'desktop-ai-export',
@@ -146,26 +156,46 @@ exportBtn.addEventListener('click', async () => {
     modelName,
     exportDate: new Date().toISOString(),
     character,
-    memory: memory || { facts: [], messages: [] },
+    memory,
   };
 
-  status('正在导出...');
+  const factCount = memory.facts.length;
+  const msgCount = memory.messages.length;
+  status(`正在导出... (角色: ${character.name}, 记忆: ${factCount}条事实 + ${msgCount}条对话)`);
+
   const result = await ipcRenderer.invoke('export-character', modelName, exportData);
   if (!result) { status('已取消'); return; }
   if (result.error) { status(`导出失败: ${result.error}`); return; }
-  status('导出成功！');
+  status(`✅ 导出成功！角色"${character.name}"(${factCount}+${msgCount}条记忆)已保存。`);
 });
 
 importDataBtn.addEventListener('click', async () => {
   const modelName = modelSelectEl.value;
   if (!modelName) { status('请先选择模型'); return; }
 
-  status('正在导入...');
+  status('正在读取文件...');
   const result = await ipcRenderer.invoke('import-character');
   if (!result) { status('已取消'); return; }
   if (result.error) { status(`导入失败: ${result.error}`); return; }
 
   const { data } = result;
+
+  // 检查导出模型与当前选中模型是否匹配
+  if (data.modelName && data.modelName !== modelName) {
+    const confirmed = await ipcRenderer.invoke('confirm-dialog',
+      '模型不匹配',
+      `导入数据来自模型"${data.modelName}"，但当前选中的是"${modelName}"。\n\n是否仍要导入到"${modelName}"？`
+    );
+    if (!confirmed) { status('已取消'); return; }
+  }
+
+  // 确认覆盖
+  const overwriteConfirmed = await ipcRenderer.invoke('confirm-dialog',
+    '确认导入',
+    `将把导出的角色卡和记忆导入到"${modelName}"。\n\n当前的角色卡和记忆将被覆盖（会自动备份）。\n\n角色名: ${data.character.name}\n记忆条数: ${data.memory ? data.memory.facts.length + data.memory.messages.length : 0}\n导出日期: ${data.exportDate || '未知'}\n\n确认导入？`
+  );
+  if (!overwriteConfirmed) { status('已取消'); return; }
+
   const modelDir = path.join(MODELS_DIR, modelName);
   const charFile = path.join(modelDir, 'character.json');
   const memFile = path.join(modelDir, 'memory.json');
@@ -191,7 +221,7 @@ importDataBtn.addEventListener('click', async () => {
 
     await refreshModels();
     modelSelectEl.value = modelName;
-    status(`导入成功！角色"${data.character.name}"的设定与记忆已恢复。`);
+    status(`✅ 导入成功！角色"${data.character.name}"的设定与记忆已恢复到"${modelName}"。`);
   } catch (e) {
     // 回滚
     try {
@@ -204,7 +234,7 @@ importDataBtn.addEventListener('click', async () => {
         fs.unlinkSync(memFile + '.bak');
       }
     } catch (_) {}
-    status(`导入失败: ${e.message}`);
+    status(`❌ 导入失败: ${e.message}`);
   }
 });
 
