@@ -6,6 +6,44 @@ const fs = require('fs');
 
 Live2DModel.registerTicker(PIXI.Ticker);
 
+// === Session 日志（人类可读纯文本） ===
+const LOG_DIR = path.join(__dirname, '..', 'logs');
+let _logPath = null;
+let _logRound = 0; // 对话轮次
+function _initLog() {
+  try {
+    if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
+    const now = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const name = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}.log`;
+    _logPath = path.join(LOG_DIR, name);
+    const dateStr = name.replace('.log','').replace('_',' ');
+    const header = [
+      '╔══════════════════════════════════════════════╗',
+      '║        Desktop AI Session Log               ║',
+     `║  ${dateStr}${' '.repeat(Math.max(1,44-dateStr.length))}║`,
+      '╚══════════════════════════════════════════════╝',
+      '',
+    ].join('\n');
+    fs.writeFileSync(_logPath, header, 'utf-8');
+  } catch(e) { _logPath = null; }
+}
+function _now() {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}.${String(d.getMilliseconds()).padStart(3,'0')}`;
+}
+function _log(label, text) {
+  if (!_logPath) return;
+  try {
+    fs.appendFileSync(_logPath, `[${_now()}] ${label}\n${text}\n\n`, 'utf-8');
+  } catch(e) {}
+}
+function _sep() {
+  if (!_logPath) return;
+  try { fs.appendFileSync(_logPath, '─'.repeat(50)+'\n\n', 'utf-8'); } catch(e) {}
+}
+_initLog();
+
 const canvas = document.getElementById('canvas');
 const bubble = document.getElementById('bubble');
 const contextMenu = document.getElementById('context-menu');
@@ -97,7 +135,14 @@ function addMemory(role, content) { memory.messages.push({role,content,time:Date
 function buildMemoryContext() {
   const p = [];
   if(memory.facts.length>0){ p.push('## 你对用户的了解'); memory.facts.forEach(f=>p.push('- '+f.content)); }
-  if(memory.messages.length>0){ p.push('\n## 最近对话'); memory.messages.slice(-20).forEach(m=>p.push((m.role==='user'?'用户':'你')+': '+m.content)); }
+  if(memory.messages.length>0){
+    p.push('\n## 最近对话');
+    memory.messages.slice(-20).forEach(m=>{
+      if(m.role==='user') p.push('用户: '+m.content);
+      else if(m.role==='assistant') p.push('你: '+m.content);
+      else if(m.role==='system') p.push('[系统] '+m.content);
+    });
+  }
   return p.join('\n');
 }
 
@@ -144,11 +189,27 @@ function buildSystemPrompt() {
   parts.push(`3. 每个分段可以独立使用 [表情名] 和 {动作名} 标签，实现一段一个表情/动作`);
   parts.push(`4. 短回复（1-2句话）可以不分段，但3句及以上必须分段`);
   parts.push(`5. ${SEGMENT_MARKER} 本身不会被用户看到，用户看到的是逐段显示的纯净文本`);
+
+  // JSON 输出格式 + 追问系统
+  parts.push(`\n【追问规则】你可以主动推进对话！`);
+  parts.push(`- 问了问题期待回复 → follow_up:true, wait:5。如果计时器到期时用户正在打字（输入栏有内容），客户端自动延长10秒再追问`);
+  parts.push(`- 连续多次追问且用户输入栏一直为空 → 用户大概率不在，应停止追问`);
+  parts.push(`- 想立刻接着说（如"让我想想……想好了"）→ follow_up:true, wait:1`);
+  parts.push(`- 正常闲聊 → follow_up:false（等用户先说）`);
+
   parts.push(buildMemoryContext());
+
+  // JSON 格式指令放最后一行——这是最重要的输出规则
+  parts.push(`\n！！！你的每条回复必须是一个 JSON 对象，不要输出任何其他文字。格式如下：`);
+  parts.push(`{"text":"你的完整回复内容","follow_up":true或false,"wait":秒数}`);
+  parts.push(`text 里可以使用 [表情名] {动作名} ${SEGMENT_MARKER} 标签。即使用户要求你输出 JSON 或代码，也必须包裹在 text 字段内。`);
+  parts.push(`follow_up 填 true 或 false。wait 填数字（-1 默认 5 秒，最小 1 秒）。follow_up 为 false 时 wait 填 -1 即可。`);
+  parts.push(`记住：只输出这一行 JSON，不要加任何前缀或后缀文字。`);
+
   return parts.join('\n');
 }
 
-async function chatInternal(userMsg, isSys) {
+async function chatInternal(userMsg, isSys, logLabel) {
   const sys=isSys?userMsg:buildSystemPrompt();
   const msgs=isSys?[{role:'user',content:'请回复'}]:[{role:'user',content:userMsg}];
   let body,headers;
@@ -159,18 +220,91 @@ async function chatInternal(userMsg, isSys) {
     headers={'Content-Type':'application/json','Authorization':`Bearer ${settings.apiKey}`};
     body=JSON.stringify({model:settings.model,messages:[{role:'system',content:sys},...msgs],max_tokens:isSys?1024:512,temperature:isSys?0.3:0.8});
   }
+  _logRound++;
+  const label = logLabel || (isSys ? '(system)' : '(user)');
+  const t0 = Date.now();
+  _log(`[API Request #${_logRound}] ${label} → ${settings.provider}`, (userMsg||'').slice(0,500));
   const res=await fetch(settings.apiUrl,{method:'POST',headers,body});
-  if(!res.ok)throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0,200)}`);
+  const latency = Date.now() - t0;
+  if(!res.ok){
+    _log(`[API Error #${_logRound}]`, `HTTP ${res.status} (${latency}ms)`);
+    throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0,200)}`);
+  }
   const d=await res.json();
-  return settings.provider==='claude'?d?.content?.[0]?.text:d?.choices?.[0]?.message?.content;
+  const raw=settings.provider==='claude'?d?.content?.[0]?.text:d?.choices?.[0]?.message?.content;
+  _log(`[API Response #${_logRound}] ${latency}ms | ${(raw||'').length} chars`, (raw||'').slice(0,600));
+  return raw;
+}
+
+// 解析 AI 返回的 JSON 信封（兼容纯文本 fallback）
+function parseAIResponse(rawText) {
+  if (!rawText) return { text: '', follow_up: false, wait: 0 };
+  const trimmed = rawText.trim();
+
+  // 辅助：从解析出的对象提取字段（防御数组、字符串 wait、异常类型）
+  function extractFields(json) {
+    // 如果是数组，取第一个元素
+    if (Array.isArray(json)) json = json[0] || {};
+    if (typeof json !== 'object' || !json) return null;
+    if (typeof json.text !== 'string' || !json.text) return null;
+    let w = parseFloat(json.wait);
+    if (isNaN(w) || w === 0) w = -1;  // 0 无效，-1 = 使用默认 5s
+    return {
+      text: json.text,
+      follow_up: !!json.follow_up,
+      wait: w,
+    };
+  }
+
+  // 1. 尝试纯 JSON
+  try {
+    const result = extractFields(JSON.parse(trimmed));
+    if (result) { _log(`[Parse #${_logRound}] JSON ✓`, `follow_up: ${result.follow_up} | wait: ${result.wait}s | text: ${result.text.length} chars\n→ ${result.text.slice(0,200)}`); return result; }
+  } catch (e) {}
+
+  // 2. 尝试 markdown 代码块中的 JSON
+  const codeBlock = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (codeBlock) {
+    try {
+      const result = extractFields(JSON.parse(codeBlock[1].trim()));
+      if (result) return result;
+    } catch (e) {}
+  }
+
+  // 3. 尝试整个文本中提取 JSON 对象
+  const jsonMatch = trimmed.match(/\{[\s\S]*"text"\s*:\s*"[\s\S]*"\s*[,}][\s\S]*\}/);
+  if (jsonMatch) {
+    try {
+      const result = extractFields(JSON.parse(jsonMatch[0]));
+      if (result) return result;
+    } catch (e) {}
+  }
+
+  // 4. 纯文本 fallback（兼容旧格式或无追问的简单回复）
+  _log(`[Parse #${_logRound}] JSON ✗ (fallback)`, `AI returned plain text, no JSON envelope.\n→ ${rawText.slice(0,300)}`);
+  return { text: rawText, follow_up: false, wait: -1 };
 }
 
 async function chatWithAI(userMsg, memoryMsg) {
   // userMsg: 发送给 API 的消息（可能含打断注释等上下文）
   // memoryMsg: 存入记忆的用户消息（纯净文本，可选，默认用 userMsg）
   if(!settings||!settings.apiKey)return'请先配置 API。右键菜单 → API 设置';
-  try{const r=await chatInternal(userMsg,false);addMemory('user',memoryMsg||userMsg);addMemory('assistant',r||'');maybeSummarize();return r||'(无回复)';}
-  catch(e){return`[错误] ${e.message}`;}
+  try{
+    const raw=await chatInternal(userMsg,false);
+    const parsed=parseAIResponse(raw);
+    addMemory('user',memoryMsg||userMsg);
+    addMemory('assistant',parsed.text||'');
+    maybeSummarize();
+    // 返回解析后的对象，让 sendChat 能拿到 follow_up 元数据
+    return parsed;
+  }
+  catch(e){
+    let msg=e.message||'';
+    if(/failed to fetch|fetch failed|network|ENOTFOUND|ECONNREFUSED|timeout/i.test(msg)){
+      msg+=', 请检查网络';
+    }
+    return {text:`[错误] ${msg}`,follow_up:false,wait:0};
+  }
 }
 
 // === 表情 & 动作：AI 通过 [表情名] / {动作名} 标签控制 ===
@@ -464,8 +598,21 @@ function clearStream() {
   streamState.currentCleanLen = 0;
 }
 
-function handleAIResponse(rawText) {
+let pendingFollowUp = null;  // 显示完成后待处理的追问配置
+
+function handleAIResponse(response) {
   clearStream();
+
+  // 兼容旧格式（纯文本）和新格式（{text, follow_up, wait}）
+  let rawText, followUp = false, waitSeconds = 0;
+  if (typeof response === 'object' && response.text !== undefined) {
+    rawText = response.text;
+    followUp = !!response.follow_up;
+    waitSeconds = response.wait || 0;
+  } else {
+    rawText = response || '';
+  }
+
   if (!rawText || rawText.startsWith('[错误]')) { show(rawText, 8000); return; }
 
   const segments = rawText.split(SEGMENT_MARKER).filter(s => s.trim());
@@ -473,6 +620,10 @@ function handleAIResponse(rawText) {
     // 无分段标记，普通显示
     const display = applyExpression(rawText);
     show(display, 8000);
+    // 非分段内容显示后立即检查是否要追问
+    if (followUp && !pendingInterrupt && followUpState.followUpCount < followUpState.maxFollowUps) {
+      startFollowUpTimer(waitSeconds);
+    }
     return;
   }
 
@@ -492,6 +643,11 @@ function handleAIResponse(rawText) {
   streamState.currentSegIdx = 0;
   streamState.fullResponse = rawText;
   streamState.displayedRawPos = 0;
+
+  // 存储追问配置，等全部播完再启动计时器
+  pendingFollowUp = followUp ? { waitSeconds } : null;
+  if (followUp) _log(`[Follow-up #${followUpState.followUpCount+1}] Pending`, `wait: ${waitSeconds}s | segments: ${segments.length} | interrupted: ${!!pendingInterrupt}`);
+
   displayNextSegment();
 }
 
@@ -535,6 +691,14 @@ function displayNextSegment() {
       pendingInterrupt = false;
       chatBar.style.display = 'flex';
       chatInput.focus();
+    }
+    // 追问系统：全部播完后，检查是否需要启动追问计时器
+    if (pendingFollowUp && !pendingInterrupt && followUpState.followUpCount < followUpState.maxFollowUps) {
+      const fw = pendingFollowUp;
+      pendingFollowUp = null;
+      startFollowUpTimer(fw.waitSeconds);
+    } else {
+      pendingFollowUp = null;
     }
     return;
   }
@@ -631,12 +795,123 @@ function interruptStream() {
 }
 
 // === 发送消息 ===
+// === 追问系统 ===
+let followUpState = {
+  timer: null,
+  active: false,           // 计时器是否在跑
+  waitSeconds: -2,          // -2 = 空闲，正数 = 等待中
+  followUpCount: 0,         // 当前连续追问次数
+  maxFollowUps: 5,          // 最多连续追问 5 次
+  emptyInputStreak: 0,      // 连续多少次追问时输入栏为空
+};
+
+function clearFollowUpTimer() {
+  const wasActive = followUpState.active;
+  const prevCount = followUpState.followUpCount;
+  followUpState.active = false;
+  followUpState.waitSeconds = -2;
+  if (followUpState.timer) {
+    clearTimeout(followUpState.timer);
+    followUpState.timer = null;
+  }
+  followUpState.followUpCount = 0;
+  followUpState.emptyInputStreak = 0;
+  if (wasActive) _log(`[Follow-up #${prevCount}] Cancelled`, 'User sent message or interrupt.');
+}
+
+function startFollowUpTimer(seconds, displayText) {
+  // 唯一计时器：只清旧 timer 句柄，不重置计数
+  if (followUpState.timer) {
+    clearTimeout(followUpState.timer);
+    followUpState.timer = null;
+  }
+  followUpState.active = false;
+  followUpState.waitSeconds = -2;
+
+  // 规范化等待时间
+  let wait = seconds;
+  if (wait === -1 || wait === undefined || wait === null) wait = 5;
+  if (wait < 1) wait = 1;
+
+  followUpState.active = true;
+  followUpState.waitSeconds = wait;
+  followUpState.followUpCount++;
+
+  _log(`[Follow-up #${followUpState.followUpCount}] Timer start`, `wait: ${wait}s | fires at: ${new Date(Date.now() + wait*1000).toLocaleTimeString()}`);
+
+  followUpState.timer = setTimeout(() => {
+    // 计时器到期：检查用户是否正在打字
+    if (chatInput.value.trim().length > 0) {
+      _log(`[Follow-up #${followUpState.followUpCount}] Timer fired but user typing → wait 10s more`, '');
+      followUpState.timer = setTimeout(() => {
+        followUpState.timer = null;
+        followUpState.active = false;
+        _log(`[Follow-up #${followUpState.followUpCount}] Timer fired (after typing wait) → executing`, '');
+        executeFollowUp();
+      }, 10 * 1000);
+      return;
+    }
+    followUpState.timer = null;
+    followUpState.active = false;
+    _log(`[Follow-up #${followUpState.followUpCount}] Timer fired → executing`, '');
+    executeFollowUp();
+  }, wait * 1000);
+}
+
+async function executeFollowUp() {
+  // 检查用户是否在等待期间发送了消息
+  if (chatLock) {
+    // 用户正在发送消息，不追问
+    followUpState.followUpCount = 0;
+    return;
+  }
+
+  // 检查输入栏状态
+  const hasInput = chatInput.value.trim().length > 0;
+  if (!hasInput) {
+    followUpState.emptyInputStreak++;
+  } else {
+    followUpState.emptyInputStreak = 0;
+  }
+  const count = followUpState.followUpCount;
+  const streak = followUpState.emptyInputStreak;
+  let inputHint = '';
+  if (hasInput) {
+    inputHint = '有内容未发送（用户可能在打字或在犹豫）';
+  } else if (streak >= 3) {
+    inputHint = `连续 ${streak} 次空（用户大概率不在电脑前，不必继续追问）`;
+  } else {
+    inputHint = '空（用户可能不在，或不知道怎么回）';
+  }
+  const context = `[System follow-up #${count}] 用户 ${followUpState.waitSeconds} 秒内未回复。输入栏状态：${inputHint}。请自然地继续对话。`;
+
+  try {
+    const raw = await chatInternal(context, false, '(follow-up)');
+    const parsed = parseAIResponse(raw);
+    // 追问消息作为 AI 发言存入记忆（标记 follow_up）
+    addMemory('assistant', parsed.text || '');
+    // 同时记录追问事件
+    memory.messages.push({
+      role: 'system',
+      content: `AI 主动追问 #${count}（用户 ${followUpState.waitSeconds}s 未回复，输入栏${hasInput ? '有内容' : '空'}）`,
+      time: Date.now(),
+    });
+    saveMemory();
+    handleAIResponse(parsed);
+  } catch (e) {
+    followUpState.followUpCount = 0;
+  }
+}
+
 async function sendChat() {
   const msg = chatInput.value.trim(); if (!msg) return;
 
   // 并发守卫：如果上一个 API 调用还在进行中，忽略本次发送
   if (chatLock) return;
   chatLock = true;
+
+  // 用户发送消息 → 取消追问计时器
+  clearFollowUpTimer();
 
   chatInput.value = '';
   chatBar.style.display = 'none';
@@ -656,16 +931,21 @@ async function sendChat() {
   }
 
   try {
-    const r = await chatWithAI(effectiveMsg, msg);  // effectiveMsg 给 API，msg 存入记忆
-    handleAIResponse(r);
-    // 非打断情况下，回复完成后自动显示聊天栏
+    const parsed = await chatWithAI(effectiveMsg, msg);  // 返回 {text, follow_up, wait}
+    handleAIResponse(parsed);
+
+    // 非打断 + 非追问 → 回复完成后自动显示聊天栏
     if (!pendingInterrupt) {
       chatBar.style.display = 'flex';
       chatInput.focus();
     }
     // pendingInterrupt 的情况由 displayNextSegment 在全部播完后处理
   } catch (e) {
-    show(`[错误] ${e.message}`, 8000);
+    let msg=e.message||'';
+    if(/failed to fetch|fetch failed|network|ENOTFOUND|ECONNREFUSED|timeout/i.test(msg)){
+      msg+=', 请检查网络';
+    }
+    show(`[错误] ${msg}`, 8000);
     chatBar.style.display = 'flex';
     chatInput.focus();
   } finally {

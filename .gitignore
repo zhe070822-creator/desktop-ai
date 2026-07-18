@@ -4,3 +4,4 @@ models/*
 !models/.gitkeep
 !models/Firefly/
 *.enc
+logs/
