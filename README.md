@@ -14,7 +14,7 @@
 
 ### 第二步：下载并启动本项目
 
-1. 从 [Releases](https://github.com/zhe070822-creator/desktop-ai/releases) 下载最新版本的压缩包，解压到任意文件夹
+1. 从 [Releases](https://github.com/Jestions-dev/desktop-ai/releases) 下载最新版本的压缩包，解压到任意文件夹
 2. 双击文件夹内的 `start.bat` 即可启动（首次会自动安装依赖，之后直接启动）
 3. 或者手动：在文件夹地址栏输入 `cmd` 回车，依次输入：
    ```bash
