@@ -1,5 +1,5 @@
 {
-  "name": "@zhe070822-creator/desktop-ai",
+  "name": "desktop-ai",
   "version": "1.4.0",
   "description": "Live2D AI 桌面伙伴",
   "main": "main.js",
